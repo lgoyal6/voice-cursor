@@ -367,9 +367,20 @@ export default function Page() {
                 try {
                   const result = await triggerReflection();
                   if (result?.ok && result.summary) {
-                    // Mark as delivered so the useEffect doesn't re-send.
                     deliveredReflectionRef.current = `manual-${Date.now()}`;
-                    const to = process.env.NEXT_PUBLIC_IMESSAGE_TARGET_NUMBER;
+                    let to =
+                      process.env.NEXT_PUBLIC_IMESSAGE_TARGET_NUMBER ||
+                      (typeof window !== "undefined"
+                        ? localStorage.getItem("vc.imessage_to") || ""
+                        : "");
+                    if (!to) {
+                      const entered = window.prompt(
+                        "Phone number to text the reflection to (E.164, e.g. +14155551234):",
+                      );
+                      if (!entered) return;
+                      to = entered.trim();
+                      localStorage.setItem("vc.imessage_to", to);
+                    }
                     const res = await fetch("/api/deliver", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
@@ -379,6 +390,8 @@ export default function Page() {
                       const body = await res.text().catch(() => "");
                       console.error("[deliver] failed", res.status, body);
                       alert(`iMessage send failed: ${res.status}. ${body}`);
+                    } else {
+                      console.log("[deliver] iMessage sent to", to);
                     }
                   } else {
                     alert(result?.reason ?? "Reflection skipped.");
