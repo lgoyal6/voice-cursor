@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Watches the Voice Memos sync directory for new recordings (synced from
- * Apple Watch via iCloud) and pushes them into the Voice Cursor pipeline.
+ * iPhone via iCloud) and pushes them into the Voice Cursor pipeline.
  *
  *   1. On new .m4a file:
  *      - Generate a Convex upload URL.

@@ -51,29 +51,50 @@ This gives a full trace per structuring / reflection call in the Respan dashboar
 | `convex/crons.ts` | cron schedule (9pm reflection, 5s claim tick) |
 | `app/page.tsx` | live dashboard + hidden `#vc-dump` textarea + bridge logic |
 
-## Watch → Mac → Convex → Whisper → Notion (no AirPlay)
+## Capture paths
 
-Record on Apple Watch with the built-in Voice Memos app. iCloud syncs the file
-to the Mac at
-`~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/`.
-Run the watcher to feed new files into the pipeline:
+Two ways to get audio into Convex from your phone — pick one or run both.
+
+### A. iOS Shortcut → direct upload (fastest, recommended)
+
+Build a Shortcut on iPhone:
+1. **Record Audio** action — records on tap, stops on tap.
+2. **Get Contents of URL** action:
+   - URL: `https://<your-deployment>.convex.site/upload-audio`
+     (i.e. `NEXT_PUBLIC_CONVEX_SITE_URL` + `/upload-audio`)
+   - Method: POST
+   - Request Body: **File** → "Recorded Audio"
+   - Headers: `Content-Type: audio/m4a`
+3. Optionally add `?key=<UPLOAD_SECRET>` to the URL if you want auth.
+4. Add the Shortcut to your Lock Screen / Action Button / Back Tap.
+
+Tap → speak → tap again → audio is in Convex within a second. The
+`transcribeAudio` action fires immediately; the dashboard shows the new
+clip in `processing` and tasks land seconds later.
+
+### B. Voice Memos + iCloud sync → Mac watcher (zero phone code)
+
+Use the stock Voice Memos app on iPhone. iCloud syncs the recording to the
+Mac at `~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/`.
+The Mac watcher uploads it to Convex:
 
 ```bash
 npm i -D chokidar       # one-time
 npm run voicememo:watch
 ```
 
-For each new memo the watcher:
-1. Uploads the audio bytes to Convex Storage (`storage:generateUploadUrl` +
-   `storage:submitAudioClip`).
+Slower than path A (iCloud sync takes 10–30s) but requires no phone setup.
+
+### Downstream — both paths converge
+
+1. Audio bytes land in Convex Storage (`storage:submitAudioClip` mutation).
 2. Convex schedules `transcribeAudio.transcribe` → OpenAI Whisper → transcript
    written to the clip.
 3. `processClip.structure` calls Claude via Respan → structured tasks → writes
-   to the `tasks` table → fires `notion.writeTasks` to mirror them into Notion.
-
-In parallel the watcher plays the file with `afplay` so a co-located
-Voice Cursor + BlackHole rig can hear it. Set `VC_AUDIO_DEVICE` to target a
-specific output device.
+   to the `tasks` table → fires `notion.writeTasks` to mirror into Notion.
+4. `executeTask.run` looks at the top task → Gmail draft / Calendar event /
+   marks "ready".
+5. 9pm cron → reflection → AppleScript iMessage to your phone.
 
 ## Audio agent (proactive Convex → Voice Cursor)
 
