@@ -1,0 +1,13 @@
+node_modules
+.next
+out
+.env
+.env.local
+.DS_Store
+convex/_generated
+*.tsbuildinfo
+next-env.d.ts
+
+# Local agent-tool state — re-derived from skills-lock.json
+.agents/
+.claude/
