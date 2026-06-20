@@ -28,6 +28,38 @@ Return a JSON array of tasks. Each task has:
 
 Order by priority (high first). Remove duplicates. Respond with ONLY the JSON array — no prose, no code fences, no markdown.`;
 
+const SUBMIT_TASKS_TOOL = {
+  name: "submit_tasks",
+  description:
+    "Submit the structured tasks extracted from the user's brain dump. " +
+    "Always split the dump into multiple distinct tasks — never combine.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      tasks: {
+        type: "array" as const,
+        description:
+          "One task per distinct action. Split on commas/sentences. Strip " +
+          "filler. Ignore test markers like 'smoke-1234567'.",
+        items: {
+          type: "object" as const,
+          properties: {
+            title: { type: "string", description: "Concise, imperative" },
+            priority: { type: "string", enum: ["high", "medium", "low"] },
+            category: {
+              type: "string",
+              enum: ["work", "personal", "admin", "learning"],
+            },
+            status: { type: "string", enum: ["todo"] },
+          },
+          required: ["title", "priority", "category", "status"],
+        },
+      },
+    },
+    required: ["tasks"],
+  },
+};
+
 async function callClaude(
   transcript: string,
   sessionId: string,
@@ -36,31 +68,41 @@ async function callClaude(
   const res = await client.messages.create(
     {
       model: "claude-opus-4-7",
-      max_tokens: 1024,
+      max_tokens: 2048,
       system: SYSTEM,
+      tools: [SUBMIT_TASKS_TOOL],
+      tool_choice: { type: "tool", name: "submit_tasks" },
       messages: [{ role: "user", content: `Input: ${transcript}` }],
     },
     { headers: respanHeaders(sessionId) },
   );
-  const text = res.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
-  // Tolerate accidental code fences.
-  const cleaned = text.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-  const parsed = JSON.parse(cleaned);
-  if (!Array.isArray(parsed)) throw new Error("Claude did not return an array");
-  return parsed.map((t: any) => ({
+
+  const toolUse = res.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+  );
+  if (!toolUse) {
+    // Surface the actual response so debugging isn't blind.
+    const text = res.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n");
+    throw new Error(
+      `Claude returned no tool_use. stop_reason=${res.stop_reason} text=${text.slice(0, 200)}`,
+    );
+  }
+  const input = toolUse.input as { tasks?: unknown };
+  if (!Array.isArray(input.tasks)) {
+    throw new Error("tool_use input had no tasks array");
+  }
+  return input.tasks.map((t: any) => ({
     title: String(t.title ?? "").slice(0, 200),
     priority:
       t.priority === "high" || t.priority === "medium" || t.priority === "low"
         ? t.priority
         : "medium",
-    category:
-      ["work", "personal", "admin", "learning"].includes(t.category)
-        ? t.category
-        : "personal",
+    category: ["work", "personal", "admin", "learning"].includes(t.category)
+      ? t.category
+      : "personal",
     status: "todo" as const,
   }));
 }
@@ -89,7 +131,14 @@ export const structure = internalAction({
         { clipId, rawText: transcript, tasks },
       );
     } else {
-      console.error("[processClip] fallback to raw, last error:", lastErr);
+      console.error(
+        "[processClip] *** RAW FALLBACK FIRING *** transcript:",
+        transcript.slice(0, 100),
+        "last error:",
+        lastErr instanceof Error ? lastErr.message : String(lastErr),
+        "stack:",
+        lastErr instanceof Error ? lastErr.stack : "(no stack)",
+      );
       writtenTasks = [
         {
           title: transcript.slice(0, 200),
