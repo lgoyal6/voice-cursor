@@ -28,35 +28,122 @@ function todayKey(): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+const REFLECTION_SYSTEM =
+  "You are a direct, honest reflection assistant. Not motivational, not corporate. " +
+  "Read the user's day and respond with a three-paragraph reflection: " +
+  "what worked, what didn't, and the single most important thing for tomorrow.";
+
+const REFLECTION_TOOL = {
+  name: "submit_reflection",
+  description: "Submit the end-of-day reflection.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      summary: {
+        type: "string",
+        description: "Three paragraphs as a single string, separated by newlines.",
+      },
+      wins: { type: "array", items: { type: "string" } },
+      gaps: { type: "array", items: { type: "string" } },
+    },
+    required: ["summary", "wins", "gaps"],
+  },
+};
+
+function normalizeReflection(raw: any): {
+  summary: string;
+  wins: string[];
+  gaps: string[];
+} {
+  return {
+    summary: String(raw?.summary ?? "").trim(),
+    wins: Array.isArray(raw?.wins) ? raw.wins.map(String) : [],
+    gaps: Array.isArray(raw?.gaps) ? raw.gaps.map(String) : [],
+  };
+}
+
+async function callReflectionWithToolUse(
+  client: Anthropic,
+  prompt: string,
+  sessionId: string,
+) {
+  const res = await client.messages.create(
+    {
+      model: "claude-opus-4-7",
+      max_tokens: 2048,
+      system: REFLECTION_SYSTEM,
+      tools: [REFLECTION_TOOL],
+      tool_choice: { type: "tool", name: "submit_reflection" },
+      messages: [{ role: "user", content: prompt }],
+    },
+    { headers: respanHeaders(sessionId) },
+  );
+  const toolUse = res.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+  );
+  if (!toolUse) {
+    const text = res.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n");
+    throw new Error(
+      `no tool_use; stop=${res.stop_reason} text=${text.slice(0, 200)}`,
+    );
+  }
+  return normalizeReflection(toolUse.input);
+}
+
+async function callReflectionPlainJson(
+  client: Anthropic,
+  prompt: string,
+  sessionId: string,
+) {
+  const res = await client.messages.create(
+    {
+      model: "claude-opus-4-7",
+      max_tokens: 2048,
+      system:
+        REFLECTION_SYSTEM +
+        "\n\nReturn ONLY a JSON object with keys: summary (string, 3 paragraphs), wins (string[]), gaps (string[]). No prose, no code fences.",
+      messages: [{ role: "user", content: prompt }],
+    },
+    { headers: respanHeaders(sessionId) },
+  );
+  let text = res.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n")
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error(`no JSON object found: ${text.slice(0, 200)}`);
+  }
+  text = text.slice(start, end + 1);
+  return normalizeReflection(JSON.parse(text));
+}
+
 async function callReflection(
   prompt: string,
   sessionId: string,
 ): Promise<{ summary: string; wins: string[]; gaps: string[] }> {
   const client = respanClient();
-  const res = await client.messages.create(
-    {
-      model: "claude-opus-4-7",
-      max_tokens: 1500,
-      system:
-        "You are a direct, honest reflection assistant. Not motivational. Return JSON with keys: summary (3 paragraphs as a single string), wins (string[]), gaps (string[]). No code fences.",
-      messages: [{ role: "user", content: prompt }],
-    },
-    { headers: respanHeaders(sessionId) },
-  );
-  const text = res.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim()
-    .replace(/^```(?:json)?/i, "")
-    .replace(/```$/, "")
-    .trim();
-  const parsed = JSON.parse(text);
-  return {
-    summary: String(parsed.summary ?? ""),
-    wins: Array.isArray(parsed.wins) ? parsed.wins.map(String) : [],
-    gaps: Array.isArray(parsed.gaps) ? parsed.gaps.map(String) : [],
-  };
+  try {
+    const r = await callReflectionWithToolUse(client, prompt, sessionId);
+    console.log(`[endOfDay] tool_use path ok, summary ${r.summary.length} chars`);
+    return r;
+  } catch (toolErr) {
+    console.warn(
+      "[endOfDay] tool_use failed, falling back to plain JSON:",
+      toolErr instanceof Error ? toolErr.message : String(toolErr),
+    );
+  }
+  const r = await callReflectionPlainJson(client, prompt, sessionId);
+  console.log(`[endOfDay] plain JSON path ok, summary ${r.summary.length} chars`);
+  return r;
 }
 
 async function sendPhoton(text: string): Promise<void> {
