@@ -10,6 +10,7 @@
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy",
     "voicememo:watch": "node scripts/voicememo-watcher.mjs",
+    "audio:agent": "node --env-file=.env.local scripts/audio-agent.mjs",
     "smoke": "node --env-file=.env.local scripts/smoke-test.mjs"
   },
   "dependencies": {

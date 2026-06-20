@@ -73,3 +73,29 @@ export const inFlightClip = query({
     return rows[0] ?? null;
   },
 });
+
+/**
+ * Returns recent audio clips (last 30 min) that have a stored audio blob,
+ * each with a signed download URL. Consumed by scripts/audio-agent.mjs.
+ */
+export const recentAudioClipsWithUrls = query({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - 30 * 60 * 1000;
+    const clips = await ctx.db.query("audio_clips").order("desc").take(50);
+    const out = [];
+    for (const c of clips) {
+      if (c.createdAt < cutoff) continue;
+      if (!c.storageId) continue;
+      const url = await ctx.storage.getUrl(c.storageId);
+      if (!url) continue;
+      out.push({
+        _id: c._id,
+        status: c.status,
+        createdAt: c.createdAt,
+        audioUrl: url,
+      });
+    }
+    return out;
+  },
+});

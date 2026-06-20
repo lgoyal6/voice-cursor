@@ -75,6 +75,27 @@ In parallel the watcher plays the file with `afplay` so a co-located
 Voice Cursor + BlackHole rig can hear it. Set `VC_AUDIO_DEVICE` to target a
 specific output device.
 
+## Audio agent (proactive Convex → Voice Cursor)
+
+`scripts/audio-agent.mjs` is a long-running Node process that subscribes to
+Convex (WebSocket, real-time) and reacts to new audio clips that have a
+`storageId`. For each new clip it downloads the audio blob via a signed URL,
+writes it to a temp file, and plays it with `afplay`. Combined with BlackHole
+as macOS output, Voice Cursor hears it as mic input and transcribes into the
+focused `#vc-dump` textarea.
+
+This runs in parallel with Convex's Whisper transcription — you get both a
+Voice Cursor transcript (via the textarea bridge) and a Whisper transcript
+(server-side). Use whichever feels better.
+
+```bash
+npm run audio:agent
+```
+
+Set `VC_AUDIO_DEVICE="BlackHole 2ch"` to send audio to BlackHole specifically
+without changing system output. Set `VC_DRY_RUN=1` to log new clips without
+actually playing them (good for debugging the subscription).
+
 ## Voice Cursor quick-add (at the Mac)
 
 The dashboard has a **Dictate** button (and Hammerspoon hotkey ⌘⇧V) that
