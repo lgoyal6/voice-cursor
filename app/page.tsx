@@ -51,6 +51,7 @@ export default function Page() {
   const awaiting = useQuery(api.processClipMutations.clipAwaitingTranscript);
 
   const submit = useMutation(api.processClipMutations.submitTranscript);
+  const submitTyped = useMutation(api.processClipMutations.submitTypedClip);
   const seed = useMutation(api.mutations.seedAudioClip);
   const toggle = useMutation(api.mutations.toggleTaskDone);
 
@@ -59,12 +60,35 @@ export default function Page() {
   const deliveredReflectionRef = useRef<string | null>(null);
   const [now, setNow] = useState<Date>(() => new Date());
   const [arrivals, setArrivals] = useState<Set<string>>(new Set());
+  const [dictating, setDictating] = useState(false);
 
   // Live clock for the header.
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 30_000);
     return () => clearInterval(id);
   }, []);
+
+  // Hammerspoon ⌘⇧V deep link: ?dictate=1 → focus textarea for Voice Cursor.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("dictate") === "1") startDictation();
+  }, []);
+
+  // Local quick-add path: dump current textarea contents into Convex as a
+  // typed clip (skips audio storage + Whisper entirely).
+  const submitTypedClip = async () => {
+    const text = textareaRef.current?.value?.trim() ?? "";
+    if (!text) return;
+    await submitTyped({ transcript: text });
+    if (textareaRef.current) textareaRef.current.value = "";
+    setDictating(false);
+  };
+
+  const startDictation = () => {
+    setDictating(true);
+    setTimeout(() => textareaRef.current?.focus(), 50);
+  };
 
   // Bridge: when a clip is awaiting a transcript, poll #vc-dump and post it.
   useEffect(() => {
@@ -186,15 +210,51 @@ export default function Page() {
         </div>
       </header>
 
-      {/* Hidden textarea — Voice Cursor types cleaned transcripts here. */}
-      <textarea
-        id="vc-dump"
-        ref={textareaRef}
-        className="sr-only"
-        aria-hidden="true"
-        tabIndex={-1}
-        defaultValue=""
-      />
+      {/* Dictation textarea — visible when Voice Cursor is active, hidden otherwise. */}
+      {dictating ? (
+        <section className="mt-6 rounded-xl border border-violet-300 bg-violet-50 p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-violet-700">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-600" />
+              </span>
+              Voice Cursor — dictate now
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={submitTypedClip}
+                className="rounded-md bg-violet-600 px-3 py-1 text-xs font-medium text-white hover:bg-violet-700"
+              >
+                Submit
+              </button>
+              <button
+                onClick={() => setDictating(false)}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+          <textarea
+            id="vc-dump"
+            ref={textareaRef}
+            autoFocus
+            placeholder="Voice Cursor will type here…"
+            className="min-h-[80px] w-full resize-none rounded-md border border-violet-200 bg-white p-3 text-sm focus:border-violet-500 focus:outline-none"
+            defaultValue=""
+          />
+        </section>
+      ) : (
+        <textarea
+          id="vc-dump"
+          ref={textareaRef}
+          className="sr-only"
+          aria-hidden="true"
+          tabIndex={-1}
+          defaultValue=""
+        />
+      )}
 
       {/* Stats hero */}
       <section className="mt-6 grid grid-cols-3 gap-3">
@@ -228,6 +288,12 @@ export default function Page() {
             Today&apos;s tasks
           </h2>
           <div className="flex gap-2">
+            <button
+              onClick={startDictation}
+              className="rounded-md bg-violet-600 px-3 py-1 text-xs font-medium text-white hover:bg-violet-700"
+            >
+              Dictate
+            </button>
             <button
               onClick={seedDemo}
               className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"

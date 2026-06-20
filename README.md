@@ -51,7 +51,7 @@ This gives a full trace per structuring / reflection call in the Respan dashboar
 | `convex/crons.ts` | cron schedule (9pm reflection, 5s claim tick) |
 | `app/page.tsx` | live dashboard + hidden `#vc-dump` textarea + bridge logic |
 
-## Watch → Mac (no AirPlay, no proximity required)
+## Watch → Mac → Convex → Whisper → Notion (no AirPlay)
 
 Record on Apple Watch with the built-in Voice Memos app. iCloud syncs the file
 to the Mac at
@@ -63,12 +63,44 @@ npm i -D chokidar       # one-time
 npm run voicememo:watch
 ```
 
-The watcher inserts an `audio_clips` row in Convex and plays the audio with
-`afplay`. If macOS output is routed through the BlackHole loopback device,
-Voice Cursor transcribes it and types into `#vc-dump`.
+For each new memo the watcher:
+1. Uploads the audio bytes to Convex Storage (`storage:generateUploadUrl` +
+   `storage:submitAudioClip`).
+2. Convex schedules `transcribeAudio.transcribe` → OpenAI Whisper → transcript
+   written to the clip.
+3. `processClip.structure` calls Claude via Respan → structured tasks → writes
+   to the `tasks` table → fires `notion.writeTasks` to mirror them into Notion.
 
-Set `VC_AUDIO_DEVICE` to target a specific output device instead of the
-system default.
+In parallel the watcher plays the file with `afplay` so a co-located
+Voice Cursor + BlackHole rig can hear it. Set `VC_AUDIO_DEVICE` to target a
+specific output device.
+
+## Voice Cursor quick-add (at the Mac)
+
+The dashboard has a **Dictate** button (and Hammerspoon hotkey ⌘⇧V) that
+exposes the `#vc-dump` textarea. Speak — Voice Cursor types into it — hit
+Submit. The text is dropped straight into Convex as a typed clip, skipping
+audio upload and Whisper. This is the fastest path when you're at your Mac.
+
+## Hammerspoon integration
+
+`hammerspoon/init.lua` provides:
+
+- **⌘⇧V** — open the dashboard with `?dictate=1`, focus the textarea so
+  Voice Cursor can type into it
+- **⌘⇧T** — surface the current top open task as a native macOS notification
+- Background poll every 60s against the Convex HTTP action `/top-task`;
+  notifies on a new top task
+
+Install:
+```bash
+brew install --cask hammerspoon
+ln -s "$(pwd)/hammerspoon/init.lua" ~/.hammerspoon/init.lua
+# then reload from the menu bar icon
+```
+Set `VC_DASHBOARD_URL` (default `http://localhost:3000`) and
+`VC_CONVEX_SITE_URL` (from `NEXT_PUBLIC_CONVEX_SITE_URL`) in your shell rc
+before launching Hammerspoon.
 
 ## iMessage delivery (AppleScript fallback)
 

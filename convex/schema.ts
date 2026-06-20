@@ -6,7 +6,7 @@ export default defineSchema({
   // Declared here so Convex codegen produces types for our subscriptions.
   audio_clips: defineTable({
     status: v.string(), // "uploaded" | "processing" | "done" | "error"
-    storageId: v.optional(v.string()),
+    storageId: v.optional(v.id("_storage")),
     transcript: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_status", ["status"]),

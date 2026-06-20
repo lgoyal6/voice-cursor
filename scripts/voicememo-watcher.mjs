@@ -4,20 +4,22 @@
  * Apple Watch via iCloud) and pushes them into the Voice Cursor pipeline.
  *
  *   1. On new .m4a file:
- *      - Insert an `audio_clips` row in Convex (status: "uploaded").
- *      - Play the file via `afplay`. If macOS default output is set to the
- *        BlackHole loopback device, Voice Cursor will hear it as mic input,
- *        transcribe, and type into the focused #vc-dump textarea.
- *   2. The existing dashboard bridge + Convex cron pick it up from there.
+ *      - Generate a Convex upload URL.
+ *      - POST the audio bytes to it → storageId.
+ *      - Insert an audio_clips row with that storageId.
+ *      - Convex transcribes via Whisper → structures via Claude → Notion + tasks.
+ *   2. Also plays the file via afplay so a local Voice Cursor + BlackHole rig
+ *      can transcribe it in parallel (set VC_AUDIO_DEVICE to target an output).
  *
- * Run with:  node scripts/voicememo-watcher.mjs
+ * Run with:  npm run voicememo:watch
  *
  * Requires:  npm i -D chokidar
  * Env:       NEXT_PUBLIC_CONVEX_URL (or CONVEX_URL)
- *            VC_AUDIO_DEVICE  optional, passed to `afplay -d`
+ *            VC_AUDIO_DEVICE  optional
  */
 
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -57,24 +59,45 @@ function playFile(path) {
   child.on("error", (err) => console.error("[afplay]", err));
 }
 
+async function uploadToConvex(path) {
+  const uploadUrl = await convex.mutation(api.storage.generateUploadUrl, {});
+  const bytes = await readFile(path);
+  const res = await fetch(uploadUrl, {
+    method: "POST",
+    headers: { "Content-Type": "audio/mp4" },
+    body: bytes,
+  });
+  if (!res.ok) {
+    throw new Error(`Convex upload failed: ${res.status} ${await res.text()}`);
+  }
+  const { storageId } = await res.json();
+  const clipId = await convex.mutation(api.storage.submitAudioClip, {
+    storageId,
+  });
+  return { clipId, storageId };
+}
+
 async function handleFile(path) {
   if (seen.has(path)) return;
   if (!path.toLowerCase().endsWith(".m4a")) return;
-  // Ignore files that existed before the watcher started.
   try {
     if (statSync(path).mtimeMs < startedAt - 1000) return;
   } catch {
     return;
   }
   seen.add(path);
-
   console.log("[voicememo]", new Date().toISOString(), "new recording:", path);
   try {
-    const clipId = await convex.mutation(api.mutations.seedAudioClip, {});
-    console.log("[voicememo] inserted audio_clips row:", clipId);
+    const { clipId, storageId } = await uploadToConvex(path);
+    console.log(
+      "[voicememo] uploaded to Convex:",
+      "clip=" + clipId,
+      "storage=" + storageId,
+    );
   } catch (err) {
-    console.error("[voicememo] Convex insert failed:", err);
+    console.error("[voicememo] Convex upload failed:", err);
   }
+  // Also play locally so a Voice Cursor + BlackHole rig can pick it up.
   playFile(path);
 }
 

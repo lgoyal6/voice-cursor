@@ -68,29 +68,32 @@ export const structure = internalAction({
       }
     }
     let taskRecordId;
+    let writtenTasks: StructuredTask[];
     if (tasks && tasks.length > 0) {
+      writtenTasks = tasks;
       taskRecordId = await ctx.runMutation(
         internal.processClipMutations.writeTasks,
         { clipId, rawText: transcript, tasks },
       );
     } else {
       console.error("[processClip] fallback to raw, last error:", lastErr);
+      writtenTasks = [
+        {
+          title: transcript.slice(0, 200),
+          priority: "high",
+          category: "personal",
+          status: "todo",
+        },
+      ];
       taskRecordId = await ctx.runMutation(
         internal.processClipMutations.writeTasks,
-        {
-          clipId,
-          rawText: transcript,
-          tasks: [
-            {
-              title: transcript.slice(0, 200),
-              priority: "high",
-              category: "personal",
-              status: "todo",
-            },
-          ],
-        },
+        { clipId, rawText: transcript, tasks: writtenTasks },
       );
     }
+    // Mirror to Notion (fire-and-forget; silently skips if env unset).
+    await ctx.scheduler.runAfter(0, internal.notion.writeTasks, {
+      tasks: writtenTasks,
+    });
     await ctx.runMutation(internal.processClipMutations.markClipDone, {
       clipId,
     });

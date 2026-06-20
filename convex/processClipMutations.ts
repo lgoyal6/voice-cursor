@@ -93,9 +93,10 @@ export const updateTaskStatus = internalMutation({
 });
 
 /**
- * Picks up freshly uploaded clips and marks them processing.
- * The dashboard reacts to "processing" by reading #vc-dump and calling
- * the ingestTranscript action.
+ * Picks up freshly uploaded clips and routes them to the right next step:
+ *  - has storageId → Whisper transcription action
+ *  - has transcript already → structuring action
+ *  - neither → leave it "processing", dashboard bridge reads #vc-dump
  */
 export const claimUploadedClips = internalMutation({
   args: {},
@@ -108,8 +109,38 @@ export const claimUploadedClips = internalMutation({
     for (const c of clips) {
       await ctx.db.patch(c._id, { status: "processing" });
       claimedIds.push(String(c._id));
+      if (c.storageId) {
+        await ctx.scheduler.runAfter(0, internal.transcribeAudio.transcribe, {
+          clipId: c._id,
+          storageId: c.storageId,
+        });
+      } else if (c.transcript && c.transcript.length > 0) {
+        await ctx.scheduler.runAfter(0, internal.processClip.structure, {
+          clipId: c._id,
+          transcript: c.transcript,
+        });
+      }
     }
     return claimedIds;
+  },
+});
+
+/** Dashboard Dictate button — fastest path, skips audio + Whisper. */
+export const submitTypedClip = mutation({
+  args: { transcript: v.string() },
+  handler: async (ctx, { transcript }) => {
+    const trimmed = transcript.trim();
+    if (!trimmed) return null;
+    const clipId = await ctx.db.insert("audio_clips", {
+      status: "processing",
+      transcript: trimmed,
+      createdAt: Date.now(),
+    });
+    await ctx.scheduler.runAfter(0, internal.processClip.structure, {
+      clipId,
+      transcript: trimmed,
+    });
+    return clipId;
   },
 });
 
