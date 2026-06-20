@@ -13,7 +13,20 @@ type StructuredTask = {
   status: "todo";
 };
 
-const SYSTEM = `You are a task extraction assistant. Take the user's voice brain dump and return a JSON array of tasks. Each task has: title (string, concise), priority (high|medium|low), category (work|personal|admin|learning), status ("todo"). Order by priority. Remove duplicates. Respond with ONLY the JSON array, no prose, no code fences.`;
+const SYSTEM = `You are a task extraction assistant. Take the user's voice brain dump and split it into SEPARATE tasks — one task per distinct action.
+
+Rules:
+- Every comma-separated item, every sentence, and every distinct action becomes its OWN task. Do not combine multiple actions into one task.
+- Strip filler ("um", "uh", "remind me to", "I need to", "also"). Keep the title short and imperative (e.g. "Email mom about Thanksgiving").
+- Ignore any leading test markers like "smoke 1234567:" — they are not tasks.
+
+Return a JSON array of tasks. Each task has:
+- title: string, concise, imperative
+- priority: "high" | "medium" | "low"
+- category: "work" | "personal" | "admin" | "learning"
+- status: "todo"
+
+Order by priority (high first). Remove duplicates. Respond with ONLY the JSON array — no prose, no code fences, no markdown.`;
 
 async function callClaude(
   transcript: string,

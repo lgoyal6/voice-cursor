@@ -20,9 +20,11 @@ const CONVEX_URL =
   process.env.NEXT_PUBLIC_CONVEX_URL ?? process.env.CONVEX_URL;
 const CONVEX_SITE_URL = process.env.NEXT_PUBLIC_CONVEX_SITE_URL;
 const DEADLINE_MS = 30_000;
+const SMOKE_TAG = `smoke-${Date.now()}`;
 const TRANSCRIPT =
-  `smoke ${Date.now()}: ` +
-  "email mom about thanksgiving, schedule dentist next week, learn convex actions, order printer ink";
+  // Marker appended at the end so the LLM ignores it (we also tell it to in the prompt).
+  "Email mom about Thanksgiving. Schedule dentist next week. Learn Convex actions. Order printer ink." +
+  ` (${SMOKE_TAG})`;
 
 if (!CONVEX_URL) {
   console.error("✗ NEXT_PUBLIC_CONVEX_URL not set");
@@ -82,6 +84,10 @@ async function main() {
   }
   if (shapeIssues === 0) ok("task shape valid");
   else fail(`${shapeIssues} shape issues across ${newRecord.tasks.length} task(s)`);
+
+  // Sanity check: brain dump has 4 items, we should get at least 3.
+  if (newRecord.tasks.length >= 3) ok(`split into ${newRecord.tasks.length} tasks (≥3 expected)`);
+  else fail(`only ${newRecord.tasks.length} task(s) — Claude collapsed the dump`);
 
   // 5. Print a summary of what Claude produced.
   for (const t of newRecord.tasks) {
