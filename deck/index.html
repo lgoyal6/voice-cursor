@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PhoneCursor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #060606;
+    --ink: #f5f3ee;
+    --dim: #8a8680;
+    --accent: #c4b5fd;
+    --accent-strong: #a78bfa;
+    --line: #1c1c1c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%; width: 100%;
+    background: var(--bg); color: var(--ink);
+    font-family: 'Inter', ui-sans-serif, -apple-system, system-ui, sans-serif;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    letter-spacing: -0.01em;
+  }
+  .deck { position: fixed; inset: 0; }
+  .slide {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 8vh 8vw;
+    opacity: 0; pointer-events: none;
+    transform: translateY(20px);
+    transition: opacity .45s ease, transform .55s ease;
+  }
+  .slide.active { opacity: 1; pointer-events: auto; transform: translateY(0); }
+
+  .eyebrow {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.85rem; letter-spacing: 0.25em; text-transform: uppercase;
+    color: var(--dim); margin-bottom: 2.5rem;
+  }
+  h1 { font-weight: 800; letter-spacing: -0.04em; line-height: 0.95; }
+  h2 { font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+  p  { color: var(--dim); font-weight: 400; line-height: 1.4; }
+  .big   { font-size: clamp(3rem, 8.5vw, 9rem); }
+  .mega  { font-size: clamp(4.5rem, 13vw, 14rem); }
+  .lede  { font-size: clamp(1.5rem, 2.4vw, 2.2rem); color: var(--ink); font-weight: 500; }
+  .small { font-size: clamp(1rem, 1.4vw, 1.4rem); }
+
+  .accent { color: var(--accent); }
+  .ink { color: var(--ink); }
+
+  /* Slide-specific layouts */
+  .center { text-align: center; align-items: center; }
+  .center > * { width: 100%; }
+
+  .corner {
+    position: fixed; bottom: 1.5rem; right: 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--dim); font-size: 0.8rem;
+    letter-spacing: 0.15em;
+  }
+  .corner-l {
+    position: fixed; bottom: 1.5rem; left: 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--dim); font-size: 0.8rem;
+    letter-spacing: 0.15em;
+  }
+
+  .flow {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 1rem 2.2rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(0.95rem, 1.5vw, 1.4rem);
+    color: var(--ink);
+    margin-top: 3rem;
+  }
+  .flow .node {
+    padding: 0.6rem 1.1rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: #0c0c0c;
+  }
+  .flow .arrow { color: var(--accent); font-weight: 600; }
+
+  .grid {
+    display: grid; grid-template-columns: repeat(2, 1fr);
+    gap: 1.4rem 3rem; margin-top: 3rem;
+  }
+  .card {
+    border-left: 2px solid var(--accent);
+    padding: 0.5rem 0 0.5rem 1.4rem;
+  }
+  .card .k { font-weight: 600; color: var(--ink); font-size: clamp(1rem, 1.4vw, 1.35rem); letter-spacing: -0.01em; }
+  .card .v { color: var(--dim); font-size: clamp(0.9rem, 1.1vw, 1.1rem); margin-top: 0.2rem; }
+
+  /* DEMO slide is a hard reset — single line, huge. */
+  .demo-slide { background: radial-gradient(circle at 50% 50%, #1a1530 0%, #060606 70%); }
+  .demo-slide h1 { font-size: clamp(5rem, 16vw, 18rem); }
+  .demo-slide .pulse {
+    display: inline-block; width: 1.2em; height: 1.2em;
+    border-radius: 999px; background: var(--accent-strong);
+    box-shadow: 0 0 0 0 var(--accent-strong);
+    animation: pulse 1.4s ease-out infinite;
+    vertical-align: middle; margin-right: 0.4em;
+  }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(167,139,250,0.7); }
+    70%  { box-shadow: 0 0 0 60px rgba(167,139,250,0); }
+    100% { box-shadow: 0 0 0 0 rgba(167,139,250,0); }
+  }
+
+  /* Title underline animation */
+  .stamp {
+    display: inline-block;
+    position: relative;
+  }
+  .stamp::after {
+    content: '';
+    position: absolute; left: 0; right: 0; bottom: -0.08em;
+    height: 0.08em; background: var(--accent);
+    transform: scaleX(0); transform-origin: left;
+    transition: transform .9s cubic-bezier(.2,.7,.2,1);
+  }
+  .slide.active .stamp::after { transform: scaleX(1); }
+
+  /* Tags row for stack */
+  .tags {
+    display: flex; flex-wrap: wrap; gap: 0.65rem;
+    margin-top: 2rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(0.85rem, 1.1vw, 1.05rem);
+  }
+  .tag {
+    padding: 0.45rem 0.9rem;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--dim);
+  }
+  .tag b { color: var(--ink); font-weight: 600; }
+
+  .quote {
+    font-size: clamp(2rem, 5vw, 5rem);
+    font-weight: 600; line-height: 1.05;
+    letter-spacing: -0.025em;
+  }
+  .quote .em { color: var(--accent); }
+  .attribution { color: var(--dim); font-size: 1rem; margin-top: 2rem; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.15em; text-transform: uppercase; }
+
+  /* Help bar */
+  .help {
+    position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+    color: var(--dim); font-size: 0.75rem; font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.2em; opacity: 0; transition: opacity .3s;
+    pointer-events: none;
+  }
+  body:hover .help { opacity: 1; }
+
+  /* Progress dots */
+  .progress {
+    position: fixed; top: 1.4rem; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 0.5rem;
+  }
+  .progress span {
+    display: block; width: 18px; height: 2px; background: #2a2a2a;
+    transition: background .3s, width .3s;
+  }
+  .progress span.active { background: var(--accent); width: 28px; }
+
+  /* Tagline strip */
+  .strip {
+    margin-top: 2.5rem;
+    color: var(--dim);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(0.8rem, 1vw, 1rem);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+
+</style>
+</head>
+<body>
+
+<div class="deck">
+
+  <!-- 1. HOOK -->
+  <section class="slide active center">
+    <div class="eyebrow">a problem you already have</div>
+    <h1 class="quote">
+      <span class="em">47 voice memos.</span><br/>
+      None of them got&nbsp;done.
+    </h1>
+    <div class="attribution">— everyone, including you</div>
+  </section>
+
+  <!-- 2. BRAND REVEAL -->
+  <section class="slide center">
+    <div class="eyebrow">introducing</div>
+    <h1 class="mega"><span class="stamp">PhoneCursor</span></h1>
+    <p class="lede" style="margin-top: 2rem;">
+      Voice in. Action out.
+    </p>
+    <div class="strip">speak · structure · ship</div>
+  </section>
+
+  <!-- 3. WHAT IT IS -->
+  <section class="slide">
+    <div class="eyebrow">the pitch in one breath</div>
+    <h2 class="big">
+      You speak. <span class="accent">We</span> do the rest.
+    </h2>
+    <div class="flow">
+      <span class="node">📱 iPhone</span>
+      <span class="arrow">→</span>
+      <span class="node">⚡ Convex</span>
+      <span class="arrow">→</span>
+      <span class="node">🧠 Claude · Respan</span>
+      <span class="arrow">→</span>
+      <span class="node">Notion · Gmail · iMessage</span>
+    </div>
+    <p class="small" style="margin-top: 2.5rem; max-width: 56ch;">
+      Tap. Talk. Watch your brain dump become structured tasks,
+      drafted emails, scheduled events, and an honest reflection
+      texted to your phone every night at 9pm.
+    </p>
+  </section>
+
+  <!-- 4. LIVE DEMO CUE -->
+  <section class="slide center demo-slide">
+    <div class="eyebrow">stop reading slides</div>
+    <h1 class="big" style="margin-top: 0.5rem;">
+      <span class="pulse"></span>LIVE DEMO
+    </h1>
+    <p class="lede" style="margin-top: 2rem; color: var(--dim);">
+      90 seconds. One tap. Watch it work.
+    </p>
+  </section>
+
+  <!-- 5. WHAT WE BUILT (post-demo recap) -->
+  <section class="slide">
+    <div class="eyebrow">what just happened</div>
+    <h2 class="big">Built in <span class="accent">one weekend</span>.</h2>
+    <div class="grid">
+      <div class="card">
+        <div class="k">Live, reactive backend</div>
+        <div class="v">Convex schema, serial agent queue, signed-URL audio storage, cron reflections.</div>
+      </div>
+      <div class="card">
+        <div class="k">Forced-structured LLM calls</div>
+        <div class="v">Claude via Respan with tool_use schema enforcement and plain-JSON fallback. Every call traced.</div>
+      </div>
+      <div class="card">
+        <div class="k">Three capture surfaces</div>
+        <div class="v">iOS Shortcut direct upload, Voice Memos + iCloud sync, on-Mac Voice Cursor dictation.</div>
+      </div>
+      <div class="card">
+        <div class="k">Native delivery</div>
+        <div class="v">Gmail drafts, Calendar events, Notion mirror, AppleScript iMessage. Hammerspoon hotkeys on Mac.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. STACK -->
+  <section class="slide">
+    <div class="eyebrow">the stack</div>
+    <h2 class="big">No black boxes.</h2>
+    <p class="small" style="margin-top: 1rem; max-width: 60ch;">
+      Every LLM call is observable through Respan.
+      Every state change is in Convex. Every action runs on your Mac.
+    </p>
+    <div class="tags">
+      <span class="tag"><b>Convex</b> — reactive db + cron + storage</span>
+      <span class="tag"><b>Claude</b> — structuring + reflection</span>
+      <span class="tag"><b>Respan</b> — LLM observability gateway</span>
+      <span class="tag"><b>Voice Cursor</b> — local dictation</span>
+      <span class="tag"><b>BlackHole</b> — audio loopback</span>
+      <span class="tag"><b>Hammerspoon</b> — Mac hotkeys + notifications</span>
+      <span class="tag"><b>Notion</b> — source of truth</span>
+      <span class="tag"><b>Next.js</b> — live dashboard</span>
+    </div>
+  </section>
+
+  <!-- 7. WHAT'S NEXT -->
+  <section class="slide">
+    <div class="eyebrow">what we ship monday</div>
+    <h2 class="big">Always-on. <span class="accent">Always yours.</span></h2>
+    <div class="grid">
+      <div class="card">
+        <div class="k">Watch-native capture</div>
+        <div class="v">Custom watchOS app with HKWorkoutSession for true background recording. One tap, then forget.</div>
+      </div>
+      <div class="card">
+        <div class="k">Style learning</div>
+        <div class="v">PhoneCursor learns your priority cadence — which dumps mean "do today" vs "park for Saturday."</div>
+      </div>
+      <div class="card">
+        <div class="k">Voice follow-ups</div>
+        <div class="v">"Mark the dentist one done." "Snooze printer ink to Friday." Per-task voice commands.</div>
+      </div>
+      <div class="card">
+        <div class="k">Team mode</div>
+        <div class="v">Same pipeline, shared workspace. Founders, ops, anyone living out of a voice memo graveyard.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. CLOSE -->
+  <section class="slide center">
+    <div class="eyebrow">phonecursor</div>
+    <h1 class="big">Stop letting your<br/>best ideas die in <span class="accent">.m4a</span>.</h1>
+    <p class="lede" style="margin-top: 3rem; color: var(--ink);">Thank you.</p>
+    <div class="strip">built by laksh + team · hackathon · 2026</div>
+  </section>
+
+</div>
+
+<div class="progress" id="progress"></div>
+<div class="corner-l" id="title">phonecursor</div>
+<div class="corner" id="counter">1 / 8</div>
+<div class="help">← / → to navigate · F for fullscreen · . to skip · R to restart</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const progress = document.getElementById('progress');
+  const counter = document.getElementById('counter');
+  let cur = 0;
+
+  // Build progress dots
+  slides.forEach((_, i) => {
+    const s = document.createElement('span');
+    progress.appendChild(s);
+  });
+
+  function go(i) {
+    cur = (i + slides.length) % slides.length;
+    slides.forEach((s, k) => s.classList.toggle('active', k === cur));
+    progress.children[cur] && Array.from(progress.children).forEach((d, k) => d.classList.toggle('active', k === cur));
+    counter.textContent = (cur + 1) + ' / ' + slides.length;
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === '.' || e.key === 'PageDown') { go(cur + 1); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { go(cur - 1); e.preventDefault(); }
+    else if (e.key === 'Home') { go(0); }
+    else if (e.key === 'End') { go(slides.length - 1); }
+    else if (e.key === 'r' || e.key === 'R') { go(0); }
+    else if (e.key === 'f' || e.key === 'F') {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen();
+    }
+  });
+
+  // Click to advance (right half) / back (left half)
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('a, button, input')) return;
+    if (e.clientX > window.innerWidth / 2) go(cur + 1);
+    else go(cur - 1);
+  });
+
+  go(0);
+</script>
+</body>
+</html>
