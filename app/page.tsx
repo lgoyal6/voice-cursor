@@ -387,9 +387,18 @@ export default function Page() {
                       body: JSON.stringify({ to, text: result.summary }),
                     });
                     if (!res.ok) {
-                      const body = await res.text().catch(() => "");
+                      const body = await res.json().catch(() => ({}));
                       console.error("[deliver] failed", res.status, body);
-                      alert(`iMessage send failed: ${res.status}. ${body}`);
+                      alert(
+                        [
+                          `iMessage send failed (${res.status})`,
+                          body?.reason && `Reason: ${body.reason}`,
+                          body?.detail && `Detail: ${body.detail}`,
+                          body?.hint && `Fix: ${body.hint}`,
+                        ]
+                          .filter(Boolean)
+                          .join("\n\n"),
+                      );
                     } else {
                       console.log("[deliver] iMessage sent to", to);
                     }
