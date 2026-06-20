@@ -2,8 +2,15 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 
-const BASE_URL =
-  process.env.RESPAN_BASE_URL ?? "https://api.respan.ai/v1";
+// The Anthropic SDK appends "/v1/messages" to baseURL, so the env var must
+// NOT already end in /v1 (otherwise we'd request /v1/v1/messages → 404).
+function normalizeBaseUrl(raw: string): string {
+  return raw.replace(/\/+$/, "").replace(/\/v1$/, "");
+}
+
+const BASE_URL = normalizeBaseUrl(
+  process.env.RESPAN_BASE_URL ?? "https://api.respan.ai",
+);
 
 export function respanClient() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
