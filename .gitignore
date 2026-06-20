@@ -1,12 +1,15 @@
 node_modules
 .next
 out
-.env
-.env.local
 .DS_Store
 convex/_generated
 *.tsbuildinfo
 next-env.d.ts
+
+# Env files — never commit real keys. .env.example is the only allowed env file.
+.env
+.env.*
+!.env.example
 
 # Local agent-tool state — re-derived from skills-lock.json
 .agents/
