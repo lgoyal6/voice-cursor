@@ -61,8 +61,8 @@ export default function Page() {
   const handledClipsRef = useRef<Set<string>>(new Set());
   const deliveredReflectionRef = useRef<string | null>(null);
   const recognitionRef = useRef<any>(null);
+  const seenTaskIdsRef = useRef<Set<string>>(new Set());
   const [now, setNow] = useState<Date>(() => new Date());
-  const [arrivals, setArrivals] = useState<Set<string>>(new Set());
   const [dictating, setDictating] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState("");
 
@@ -185,25 +185,16 @@ export default function Page() {
     };
   }, [awaiting, submit]);
 
-  // Animate new task arrivals.
-  useEffect(() => {
-    setArrivals((prev) => {
-      const next = new Set(prev);
-      for (const r of tasks) {
-        const key = String(r._id);
-        if (!prev.has(key)) {
-          next.add(key);
-          setTimeout(() => {
-            setArrivals((cur) => {
-              const updated = new Set(cur);
-              updated.delete(key);
-              return updated;
-            });
-          }, 800);
-        }
-      }
-      return next;
-    });
+  // Compute "freshly arrived" task IDs once per tasks change.
+  // No useState / useEffect needed — avoids re-render loops.
+  const arrivals = useMemo(() => {
+    const fresh = new Set<string>();
+    for (const r of tasks) {
+      const key = String(r._id);
+      if (!seenTaskIdsRef.current.has(key)) fresh.add(key);
+    }
+    for (const key of fresh) seenTaskIdsRef.current.add(key);
+    return fresh;
   }, [tasks]);
 
   // Deliver reflection via local iMessage route once per new reflection.
