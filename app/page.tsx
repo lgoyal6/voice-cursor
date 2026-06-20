@@ -60,9 +60,11 @@ export default function Page() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const handledClipsRef = useRef<Set<string>>(new Set());
   const deliveredReflectionRef = useRef<string | null>(null);
+  const recognitionRef = useRef<any>(null);
   const [now, setNow] = useState<Date>(() => new Date());
   const [arrivals, setArrivals] = useState<Set<string>>(new Set());
   const [dictating, setDictating] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState("");
 
   // Live clock for the header.
   useEffect(() => {
@@ -77,19 +79,79 @@ export default function Page() {
     if (params.get("dictate") === "1") startDictation();
   }, []);
 
-  // Local quick-add path: dump current textarea contents into Convex as a
-  // typed clip (skips audio storage + Whisper entirely).
+  // Submit the current dictation buffer to Convex.
   const submitTypedClip = async () => {
-    const text = textareaRef.current?.value?.trim() ?? "";
-    if (!text) return;
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {}
+    const text =
+      (textareaRef.current?.value?.trim() ?? "") || liveTranscript.trim();
+    if (!text) {
+      setDictating(false);
+      return;
+    }
     await submitTyped({ transcript: text });
     if (textareaRef.current) textareaRef.current.value = "";
+    setLiveTranscript("");
     setDictating(false);
   };
 
+  // Open the textarea and start Web Speech API recognition right away.
+  // No Voice Cursor / BlackHole config needed — works straight from the browser.
   const startDictation = () => {
     setDictating(true);
+    setLiveTranscript("");
     setTimeout(() => textareaRef.current?.focus(), 50);
+
+    if (typeof window === "undefined") return;
+    const SR: any =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+    if (!SR) {
+      console.warn(
+        "[dictate] SpeechRecognition not available; falling back to Voice Cursor typing",
+      );
+      return;
+    }
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    rec.onresult = (event: any) => {
+      let final = "";
+      let interim = "";
+      for (let i = 0; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) final += t;
+        else interim += t;
+      }
+      const combined = (final + " " + interim).trim();
+      setLiveTranscript(combined);
+      if (textareaRef.current) textareaRef.current.value = combined;
+    };
+    rec.onerror = (e: any) => console.error("[dictate] speech error", e);
+    rec.onend = () => {
+      // If we ended unexpectedly while still dictating, restart.
+      if (recognitionRef.current === rec) {
+        // intentional stop, leave alone
+      }
+    };
+    recognitionRef.current = rec;
+    try {
+      rec.start();
+    } catch (err) {
+      console.error("[dictate] failed to start recognition", err);
+    }
+  };
+
+  const cancelDictation = () => {
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {}
+    recognitionRef.current = null;
+    setLiveTranscript("");
+    if (textareaRef.current) textareaRef.current.value = "";
+    setDictating(false);
   };
 
   // Bridge: when a clip is awaiting a transcript, poll #vc-dump and post it.
@@ -221,7 +283,7 @@ export default function Page() {
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-400 opacity-75" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-600" />
               </span>
-              Voice Cursor — dictate now
+              Listening — speak now
             </div>
             <div className="flex gap-2">
               <button
@@ -231,7 +293,7 @@ export default function Page() {
                 Submit
               </button>
               <button
-                onClick={() => setDictating(false)}
+                onClick={cancelDictation}
                 className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
               >
                 Cancel
@@ -242,10 +304,16 @@ export default function Page() {
             id="vc-dump"
             ref={textareaRef}
             autoFocus
-            placeholder="Voice Cursor will type here…"
-            className="min-h-[80px] w-full resize-none rounded-md border border-violet-200 bg-white p-3 text-sm focus:border-violet-500 focus:outline-none"
+            placeholder="Speak — your words appear here in real time…"
+            className="min-h-[100px] w-full resize-none rounded-md border border-violet-200 bg-white p-3 text-sm focus:border-violet-500 focus:outline-none"
             defaultValue=""
+            onChange={(e) => setLiveTranscript(e.target.value)}
           />
+          <p className="mt-2 text-xs text-violet-600">
+            {liveTranscript
+              ? `${liveTranscript.split(/\s+/).filter(Boolean).length} words captured`
+              : "Grant microphone permission in your browser if prompted."}
+          </p>
         </section>
       ) : (
         <textarea
@@ -306,7 +374,27 @@ export default function Page() {
               onClick={async () => {
                 setReflectionRunning(true);
                 try {
-                  await triggerReflection();
+                  const result = await triggerReflection();
+                  if (result?.ok && result.summary) {
+                    // Mark as delivered so the useEffect doesn't re-send.
+                    deliveredReflectionRef.current = `manual-${Date.now()}`;
+                    const to = process.env.NEXT_PUBLIC_IMESSAGE_TARGET_NUMBER;
+                    const res = await fetch("/api/deliver", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ to, text: result.summary }),
+                    });
+                    if (!res.ok) {
+                      const body = await res.text().catch(() => "");
+                      console.error("[deliver] failed", res.status, body);
+                      alert(`iMessage send failed: ${res.status}. ${body}`);
+                    }
+                  } else {
+                    alert(result?.reason ?? "Reflection skipped.");
+                  }
+                } catch (err) {
+                  console.error("[reflection]", err);
+                  alert(`Reflection failed: ${String(err)}`);
                 } finally {
                   setReflectionRunning(false);
                 }
@@ -314,7 +402,7 @@ export default function Page() {
               disabled={reflectionRunning}
               className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >
-              {reflectionRunning ? "Reflecting…" : "Run 9pm reflection"}
+              {reflectionRunning ? "Sending…" : "Send reflection now"}
             </button>
             <button
               onClick={clear}

@@ -6,15 +6,17 @@ import { respanClient, respanHeaders } from "./respan";
 import type Anthropic from "@anthropic-ai/sdk";
 
 /**
- * Manually fire the 9pm reflection pipeline.
- * Same code path the cron uses — generates reflection, writes it, fires
- * the dashboard's iMessage delivery (via the reflections subscription).
+ * Manually fire the reflection pipeline. Generates, writes, and returns
+ * the summary text so the button handler can send the iMessage instantly.
  */
 export const triggerReflection = action({
   args: {},
-  handler: async (ctx) => {
-    await ctx.runAction(internal.endOfDay.runReflection, {});
-    return { ok: true } as const;
+  handler: async (ctx): Promise<{ ok: boolean; summary?: string; reason?: string }> => {
+    const result = await ctx.runAction(internal.endOfDay.runReflection, {});
+    if (!result || !result.summary) {
+      return { ok: false, reason: "no reflection produced (likely no tasks today)" };
+    }
+    return { ok: true, summary: result.summary };
   },
 });
 
@@ -79,7 +81,7 @@ async function sendPhoton(text: string): Promise<void> {
 
 export const runReflection = internalAction({
   args: {},
-  handler: async (ctx) => {
+  handler: async (ctx): Promise<{ summary: string } | null> => {
     const records = await ctx.runQuery(
       internal.endOfDayDb.getTodaysTaskRecords,
       {},
@@ -87,7 +89,7 @@ export const runReflection = internalAction({
     const all = records.flatMap((r) => r.tasks);
     if (all.length === 0) {
       console.log("[endOfDay] no tasks today, skipping reflection");
-      return;
+      return null;
     }
     const completed = all.filter((t) => t.status === "done");
     const lines = all
@@ -127,6 +129,7 @@ export const runReflection = internalAction({
     } catch (err) {
       console.error("[endOfDay] photon delivery failed", err);
     }
+    return { summary: result.summary };
   },
 });
 
