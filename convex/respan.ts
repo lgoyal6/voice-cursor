@@ -8,17 +8,14 @@ function normalizeBaseUrl(raw: string): string {
   return raw.replace(/\/+$/, "").replace(/\/v1$/, "");
 }
 
-const BASE_URL = normalizeBaseUrl(
-  process.env.RESPAN_BASE_URL ?? "https://api.respan.ai",
-);
-
 export function respanClient() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
-  return new Anthropic({
-    apiKey,
-    baseURL: BASE_URL,
-  });
+  // Resolve baseURL fresh each call so env changes don't require redeploy.
+  const raw = process.env.RESPAN_BASE_URL ?? "https://api.respan.ai";
+  const baseURL = normalizeBaseUrl(raw);
+  console.log(`[respan] raw="${raw}" → baseURL="${baseURL}"`);
+  return new Anthropic({ apiKey, baseURL });
 }
 
 export function respanHeaders(sessionId: string) {
