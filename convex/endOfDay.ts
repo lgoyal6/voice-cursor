@@ -126,6 +126,29 @@ async function callReflectionPlainJson(
   return normalizeReflection(JSON.parse(text));
 }
 
+async function callReflectionPlainText(
+  client: Anthropic,
+  prompt: string,
+  sessionId: string,
+) {
+  const res = await client.messages.create(
+    {
+      model: "claude-opus-4-7",
+      max_tokens: 1500,
+      system: REFLECTION_SYSTEM + " Respond as plain prose only — no JSON, no headings, no markdown.",
+      messages: [{ role: "user", content: prompt }],
+    },
+    { headers: respanHeaders(sessionId) },
+  );
+  const text = res.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n")
+    .trim();
+  if (!text) throw new Error("empty plain text response");
+  return { summary: text, wins: [] as string[], gaps: [] as string[] };
+}
+
 async function callReflection(
   prompt: string,
   sessionId: string,
@@ -141,8 +164,18 @@ async function callReflection(
       toolErr instanceof Error ? toolErr.message : String(toolErr),
     );
   }
-  const r = await callReflectionPlainJson(client, prompt, sessionId);
-  console.log(`[endOfDay] plain JSON path ok, summary ${r.summary.length} chars`);
+  try {
+    const r = await callReflectionPlainJson(client, prompt, sessionId);
+    console.log(`[endOfDay] plain JSON path ok, summary ${r.summary.length} chars`);
+    return r;
+  } catch (jsonErr) {
+    console.warn(
+      "[endOfDay] plain JSON failed, falling back to plain text:",
+      jsonErr instanceof Error ? jsonErr.message : String(jsonErr),
+    );
+  }
+  const r = await callReflectionPlainText(client, prompt, sessionId);
+  console.log(`[endOfDay] plain text path ok, summary ${r.summary.length} chars`);
   return r;
 }
 
@@ -196,9 +229,10 @@ export const runReflection = internalAction({
     try {
       result = await callReflection(prompt, sessionId);
     } catch (err) {
-      console.error("[endOfDay] Claude call failed", err);
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error("[endOfDay] *** ALL THREE Claude paths failed ***", detail);
       result = {
-        summary: `Reflection unavailable (LLM error). Captured ${all.length} task(s), completed ${completed.length}.`,
+        summary: `Reflection unavailable. ${all.length} tasks today, ${completed.length} done.\n\nLLM error: ${detail.slice(0, 300)}`,
         wins: completed.map((t) => t.title),
         gaps: all.filter((t) => t.status !== "done").map((t) => t.title),
       };
