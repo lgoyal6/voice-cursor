@@ -14,3 +14,6 @@ next-env.d.ts
 # Local agent-tool state — re-derived from skills-lock.json
 .agents/
 .claude/
+
+# Large, regenerable lockfile (recreated by `npm install`)
+package-lock.json

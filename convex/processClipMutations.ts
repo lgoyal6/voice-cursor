@@ -174,3 +174,78 @@ export const getTaskRecord = internalQuery({
   args: { taskRecordId: v.id("tasks") },
   handler: async (ctx, { taskRecordId }) => ctx.db.get(taskRecordId),
 });
+
+const notionRowShape = v.object({
+  notionPageId: v.string(),
+  title: v.string(),
+  priority: v.union(v.literal("high"), v.literal("medium"), v.literal("low")),
+  category: v.union(
+    v.literal("work"),
+    v.literal("personal"),
+    v.literal("admin"),
+    v.literal("learning"),
+  ),
+  status: v.union(
+    v.literal("todo"),
+    v.literal("ready"),
+    v.literal("drafted"),
+    v.literal("scheduled"),
+    v.literal("done"),
+    v.literal("error"),
+  ),
+});
+
+/**
+ * Reconcile the Convex `tasks` table to match the Notion database (source of
+ * truth). One Convex record per Notion row, keyed by notionPageId:
+ *  - new row  → insert
+ *  - changed  → patch
+ *  - removed  → delete the Convex record
+ * Only touches Notion-sourced records (those with a notionPageId).
+ */
+export const syncNotionRows = internalMutation({
+  args: { rows: v.array(notionRowShape) },
+  handler: async (ctx, { rows }) => {
+    const existing = await ctx.db.query("tasks").collect();
+    const byPage = new Map<string, (typeof existing)[number]>();
+    for (const r of existing) {
+      if (r.notionPageId) byPage.set(r.notionPageId, r);
+    }
+    const incoming = new Set(rows.map((r) => r.notionPageId));
+
+    for (const row of rows) {
+      const task = {
+        title: row.title,
+        priority: row.priority,
+        category: row.category,
+        status: row.status,
+      };
+      const cur = byPage.get(row.notionPageId);
+      if (!cur) {
+        await ctx.db.insert("tasks", {
+          notionPageId: row.notionPageId,
+          rawText: row.title,
+          tasks: [task],
+          createdAt: Date.now(),
+        });
+      } else {
+        const c0 = cur.tasks[0];
+        const changed =
+          !c0 ||
+          c0.title !== task.title ||
+          c0.priority !== task.priority ||
+          c0.category !== task.category ||
+          c0.status !== task.status;
+        if (changed) {
+          await ctx.db.patch(cur._id, { rawText: row.title, tasks: [task] });
+        }
+      }
+    }
+
+    for (const r of existing) {
+      if (r.notionPageId && !incoming.has(r.notionPageId)) {
+        await ctx.db.delete(r._id);
+      }
+    }
+  },
+});

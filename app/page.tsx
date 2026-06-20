@@ -96,52 +96,13 @@ export default function Page() {
     setDictating(false);
   };
 
-  // Open the textarea and start Web Speech API recognition right away.
-  // No Voice Cursor / BlackHole config needed — works straight from the browser.
+  // Open the textarea and focus it so Voice Cursor (driven by the audio agent
+  // → BlackHole) types the transcript straight in. No browser speech
+  // recognition — Voice Cursor is the transcriber; the #vc-dump bridge submits.
   const startDictation = () => {
     setDictating(true);
     setLiveTranscript("");
     setTimeout(() => textareaRef.current?.focus(), 50);
-
-    if (typeof window === "undefined") return;
-    const SR: any =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
-    if (!SR) {
-      console.warn(
-        "[dictate] SpeechRecognition not available; falling back to Voice Cursor typing",
-      );
-      return;
-    }
-    const rec = new SR();
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = "en-US";
-    rec.onresult = (event: any) => {
-      let final = "";
-      let interim = "";
-      for (let i = 0; i < event.results.length; i++) {
-        const t = event.results[i][0].transcript;
-        if (event.results[i].isFinal) final += t;
-        else interim += t;
-      }
-      const combined = (final + " " + interim).trim();
-      setLiveTranscript(combined);
-      if (textareaRef.current) textareaRef.current.value = combined;
-    };
-    rec.onerror = (e: any) => console.error("[dictate] speech error", e);
-    rec.onend = () => {
-      // If we ended unexpectedly while still dictating, restart.
-      if (recognitionRef.current === rec) {
-        // intentional stop, leave alone
-      }
-    };
-    recognitionRef.current = rec;
-    try {
-      rec.start();
-    } catch (err) {
-      console.error("[dictate] failed to start recognition", err);
-    }
   };
 
   const cancelDictation = () => {

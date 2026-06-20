@@ -13,6 +13,8 @@ export default defineSchema({
 
   tasks: defineTable({
     clipId: v.optional(v.id("audio_clips")),
+    // Set when this record mirrors a single Notion database row (source of truth).
+    notionPageId: v.optional(v.string()),
     rawText: v.string(),
     tasks: v.array(
       v.object({
@@ -40,7 +42,9 @@ export default defineSchema({
       }),
     ),
     createdAt: v.number(),
-  }).index("by_createdAt", ["createdAt"]),
+  })
+    .index("by_createdAt", ["createdAt"])
+    .index("by_notionPageId", ["notionPageId"]),
 
   reflections: defineTable({
     date: v.string(), // YYYY-MM-DD

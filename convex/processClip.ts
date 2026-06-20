@@ -166,62 +166,80 @@ async function callClaude(
   return result;
 }
 
+/** Claude split with retry + raw fallback so a transcript never vanishes. */
+async function splitTranscript(
+  transcript: string,
+  sessionId: string,
+): Promise<StructuredTask[]> {
+  let tasks: StructuredTask[] | null = null;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      tasks = await callClaude(transcript, sessionId);
+      break;
+    } catch (err) {
+      lastErr = err;
+      console.error("[processClip] attempt", attempt, err);
+    }
+  }
+  if (tasks && tasks.length > 0) return tasks;
+  console.error(
+    "[processClip] *** RAW FALLBACK FIRING *** transcript:",
+    transcript.slice(0, 100),
+    "last error:",
+    lastErr instanceof Error ? lastErr.message : String(lastErr),
+  );
+  return [
+    {
+      title: transcript.slice(0, 200),
+      priority: "high",
+      category: "personal",
+      status: "todo",
+    },
+  ];
+}
+
+const notionMode = () =>
+  !!(process.env.NOTION_API_KEY && process.env.NOTION_DATABASE_ID);
+
+/**
+ * Split arbitrary text into tasks and write them to the Notion Tasks DB.
+ * Used by notion.ingestPage for raw paragraphs dictated into the page body.
+ */
+export const structureText = internalAction({
+  args: { text: v.string(), sessionId: v.optional(v.string()) },
+  handler: async (ctx, { text, sessionId }): Promise<{ count: number }> => {
+    const tasks = await splitTranscript(text, sessionId ?? "notion-ingest");
+    await ctx.runAction(internal.notion.writeTasks, { tasks });
+    return { count: tasks.length };
+  },
+});
+
 export const structure = internalAction({
   args: { clipId: v.id("audio_clips"), transcript: v.string() },
-  handler: async (ctx, { clipId, transcript }): Promise<{ taskRecordId: string }> => {
+  handler: async (ctx, { clipId, transcript }): Promise<{ ok: true }> => {
     const sessionId = String(clipId);
-    let tasks: StructuredTask[] | null = null;
-    let lastErr: unknown = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        tasks = await callClaude(transcript, sessionId);
-        break;
-      } catch (err) {
-        lastErr = err;
-        console.error("[processClip] attempt", attempt, err);
-      }
+    const writtenTasks = await splitTranscript(transcript, sessionId);
+
+    if (notionMode()) {
+      // Notion is the source of truth: write rows there and let the sync cron
+      // (notion.pull) ingest them into the Convex tasks table. No direct write.
+      await ctx.runAction(internal.notion.writeTasks, { tasks: writtenTasks });
+      await ctx.runMutation(internal.processClipMutations.markClipDone, {
+        clipId,
+      });
+      return { ok: true };
     }
-    let taskRecordId;
-    let writtenTasks: StructuredTask[];
-    if (tasks && tasks.length > 0) {
-      writtenTasks = tasks;
-      taskRecordId = await ctx.runMutation(
-        internal.processClipMutations.writeTasks,
-        { clipId, rawText: transcript, tasks },
-      );
-    } else {
-      console.error(
-        "[processClip] *** RAW FALLBACK FIRING *** transcript:",
-        transcript.slice(0, 100),
-        "last error:",
-        lastErr instanceof Error ? lastErr.message : String(lastErr),
-        "stack:",
-        lastErr instanceof Error ? lastErr.stack : "(no stack)",
-      );
-      writtenTasks = [
-        {
-          title: transcript.slice(0, 200),
-          priority: "high",
-          category: "personal",
-          status: "todo",
-        },
-      ];
-      taskRecordId = await ctx.runMutation(
-        internal.processClipMutations.writeTasks,
-        { clipId, rawText: transcript, tasks: writtenTasks },
-      );
-    }
-    // Mirror to Notion (fire-and-forget; silently skips if env unset).
-    await ctx.scheduler.runAfter(0, internal.notion.writeTasks, {
-      tasks: writtenTasks,
-    });
+
+    // Fallback (Notion unset): write straight to Convex so the dashboard works.
+    const taskRecordId = await ctx.runMutation(
+      internal.processClipMutations.writeTasks,
+      { clipId, rawText: transcript, tasks: writtenTasks },
+    );
     await ctx.runMutation(internal.processClipMutations.markClipDone, {
       clipId,
     });
-    // Hand off to executor for the top task.
-    await ctx.scheduler.runAfter(0, internal.executeTask.run, {
-      taskRecordId,
-    });
-    return { taskRecordId };
+    await ctx.scheduler.runAfter(0, internal.executeTask.run, { taskRecordId });
+    return { ok: true };
   },
 });
