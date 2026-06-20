@@ -93,10 +93,9 @@ export const updateTaskStatus = internalMutation({
 });
 
 /**
- * Picks up freshly uploaded clips and routes them to the right next step:
- *  - has storageId → Whisper transcription action
- *  - has transcript already → structuring action
- *  - neither → leave it "processing", dashboard bridge reads #vc-dump
+ * Picks up freshly uploaded clips that the audio agent does NOT own
+ * (i.e., no storageId — typed clips, Voice Cursor textarea clips).
+ * Audio-bearing clips are left for the agent's atomic claim.
  */
 export const claimUploadedClips = internalMutation({
   args: {},
@@ -107,14 +106,10 @@ export const claimUploadedClips = internalMutation({
       .collect();
     const claimedIds: string[] = [];
     for (const c of clips) {
+      if (c.storageId) continue; // agent owns audio clips
       await ctx.db.patch(c._id, { status: "processing" });
       claimedIds.push(String(c._id));
-      if (c.storageId) {
-        await ctx.scheduler.runAfter(0, internal.transcribeAudio.transcribe, {
-          clipId: c._id,
-          storageId: c.storageId,
-        });
-      } else if (c.transcript && c.transcript.length > 0) {
+      if (c.transcript && c.transcript.length > 0) {
         await ctx.scheduler.runAfter(0, internal.processClip.structure, {
           clipId: c._id,
           transcript: c.transcript,
