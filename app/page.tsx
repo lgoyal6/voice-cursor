@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 
 const priorityStyles: Record<string, string> = {
@@ -54,6 +54,8 @@ export default function Page() {
   const submitTyped = useMutation(api.processClipMutations.submitTypedClip);
   const seed = useMutation(api.mutations.seedAudioClip);
   const toggle = useMutation(api.mutations.toggleTaskDone);
+  const triggerReflection = useAction(api.endOfDay.triggerReflection);
+  const [reflectionRunning, setReflectionRunning] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const handledClipsRef = useRef<Set<string>>(new Set());
@@ -299,6 +301,20 @@ export default function Page() {
               className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
             >
               Seed demo
+            </button>
+            <button
+              onClick={async () => {
+                setReflectionRunning(true);
+                try {
+                  await triggerReflection();
+                } finally {
+                  setReflectionRunning(false);
+                }
+              }}
+              disabled={reflectionRunning}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              {reflectionRunning ? "Reflecting…" : "Run 9pm reflection"}
             </button>
             <button
               onClick={clear}

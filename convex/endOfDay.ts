@@ -1,9 +1,22 @@
 "use node";
 
-import { internalAction } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { respanClient, respanHeaders } from "./respan";
 import type Anthropic from "@anthropic-ai/sdk";
+
+/**
+ * Manually fire the 9pm reflection pipeline.
+ * Same code path the cron uses — generates reflection, writes it, fires
+ * the dashboard's iMessage delivery (via the reflections subscription).
+ */
+export const triggerReflection = action({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.runAction(internal.endOfDay.runReflection, {});
+    return { ok: true } as const;
+  },
+});
 
 function todayKey(): string {
   const d = new Date();
