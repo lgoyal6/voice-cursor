@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 
 const priorityStyles: Record<string, string> = {
-  high: "bg-red-100 text-red-800 border-red-200",
-  medium: "bg-amber-100 text-amber-800 border-amber-200",
-  low: "bg-slate-100 text-slate-700 border-slate-200",
+  high: "bg-red-100 text-red-800 ring-red-200",
+  medium: "bg-amber-100 text-amber-800 ring-amber-200",
+  low: "bg-slate-100 text-slate-700 ring-slate-200",
 };
 
 const statusStyles: Record<string, string> = {
@@ -19,27 +19,52 @@ const statusStyles: Record<string, string> = {
   error: "bg-red-100 text-red-800",
 };
 
+const categoryEmoji: Record<string, string> = {
+  work: "💼",
+  personal: "🌿",
+  admin: "📎",
+  learning: "📚",
+};
+
 const pipelineLabel: Record<string, { dot: string; text: string }> = {
   idle: { dot: "bg-slate-300", text: "waiting" },
   uploaded: { dot: "bg-amber-400 animate-pulse", text: "queued" },
-  processing: { dot: "bg-blue-500 animate-pulse", text: "processing" },
-  done: { dot: "bg-emerald-500", text: "done" },
+  processing: { dot: "bg-blue-500 animate-pulse", text: "structuring" },
+  done: { dot: "bg-emerald-500", text: "ready" },
   error: { dot: "bg-red-500", text: "error" },
 };
+
+const PRIORITY_ORDER: Array<"high" | "medium" | "low"> = ["high", "medium", "low"];
 
 const POLL_MS = 500;
 const POLL_TIMEOUT_MS = 30_000;
 
+const EXAMPLE_DUMP =
+  "email mom about thanksgiving, schedule dentist next week, learn convex actions, order printer ink";
+
 export default function Page() {
   const tasks = useQuery(api.queries.todaysTasks) ?? [];
   const pipeline = useQuery(api.queries.pipelineStatus) ?? "idle";
+  const stats = useQuery(api.queries.todaysStats);
+  const inFlight = useQuery(api.queries.inFlightClip);
   const reflection = useQuery(api.queries.latestReflection);
   const awaiting = useQuery(api.processClipMutations.clipAwaitingTranscript);
+
   const submit = useMutation(api.processClipMutations.submitTranscript);
+  const seed = useMutation(api.mutations.seedAudioClip);
+  const toggle = useMutation(api.mutations.toggleTaskDone);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const handledClipsRef = useRef<Set<string>>(new Set());
   const deliveredReflectionRef = useRef<string | null>(null);
+  const [now, setNow] = useState<Date>(() => new Date());
+  const [arrivals, setArrivals] = useState<Set<string>>(new Set());
+
+  // Live clock for the header.
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Bridge: when a clip is awaiting a transcript, poll #vc-dump and post it.
   useEffect(() => {
@@ -72,7 +97,28 @@ export default function Page() {
     };
   }, [awaiting, submit]);
 
-  // When a new reflection lands, deliver it via local iMessage route once.
+  // Animate new task arrivals.
+  useEffect(() => {
+    setArrivals((prev) => {
+      const next = new Set(prev);
+      for (const r of tasks) {
+        const key = String(r._id);
+        if (!prev.has(key)) {
+          next.add(key);
+          setTimeout(() => {
+            setArrivals((cur) => {
+              const updated = new Set(cur);
+              updated.delete(key);
+              return updated;
+            });
+          }, 800);
+        }
+      }
+      return next;
+    });
+  }, [tasks]);
+
+  // Deliver reflection via local iMessage route once per new reflection.
   useEffect(() => {
     if (!reflection) return;
     const id = reflection._id as unknown as string;
@@ -88,6 +134,33 @@ export default function Page() {
 
   const indicator = pipelineLabel[pipeline] ?? pipelineLabel.idle;
 
+  const grouped = useMemo(() => {
+    const buckets: Record<
+      "high" | "medium" | "low",
+      Array<{ recordId: string; index: number; t: (typeof tasks)[number]["tasks"][number] }>
+    > = { high: [], medium: [], low: [] };
+    for (const r of tasks) {
+      r.tasks.forEach((t, i) =>
+        buckets[t.priority].push({ recordId: String(r._id), index: i, t }),
+      );
+    }
+    return buckets;
+  }, [tasks]);
+
+  const dateLine = now.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+  const hour = now.getHours();
+  const greeting =
+    hour < 5 ? "Still up" : hour < 12 ? "Good morning" : hour < 18 ? "Afternoon" : "Evening";
+
+  const seedDemo = async () => {
+    if (textareaRef.current) textareaRef.current.value = EXAMPLE_DUMP;
+    await seed({});
+  };
+
   const clear = () => {
     if (textareaRef.current) textareaRef.current.value = "";
     handledClipsRef.current.clear();
@@ -95,14 +168,21 @@ export default function Page() {
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
-      <header className="flex items-center justify-between border-b border-slate-200 pb-6">
+      <header className="flex items-start justify-between gap-4 border-b border-slate-200 pb-6">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Voice Cursor</h1>
-          <p className="text-sm text-slate-500">Today&apos;s brain dump → tasks</p>
+          <p className="text-xs uppercase tracking-[0.18em] text-slate-400">
+            {dateLine}
+          </p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+            {greeting}, Laksh.
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Speak. We&apos;ll structure the rest.
+          </p>
         </div>
-        <div className="flex items-center gap-2 text-sm">
-          <span className={`h-2.5 w-2.5 rounded-full ${indicator.dot}`} />
-          <span className="text-slate-600">{indicator.text}</span>
+        <div className="mt-1 flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs">
+          <span className={`h-2 w-2 rounded-full ${indicator.dot}`} />
+          <span className="text-slate-700">{indicator.text}</span>
         </div>
       </header>
 
@@ -116,58 +196,133 @@ export default function Page() {
         defaultValue=""
       />
 
-      <section className="mt-8">
+      {/* Stats hero */}
+      <section className="mt-6 grid grid-cols-3 gap-3">
+        <StatCard label="Captured" value={stats?.captured ?? 0} />
+        <StatCard label="Done" value={stats?.done ?? 0} tone="emerald" />
+        <StatCard label="In flight" value={stats?.inFlight ?? 0} tone="violet" />
+      </section>
+
+      {/* Live "thinking" panel */}
+      {inFlight && (
+        <section className="mt-6 overflow-hidden rounded-xl border border-blue-200 bg-blue-50/60 p-4">
+          <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-blue-700">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500" />
+            </span>
+            Structuring
+          </div>
+          <p className="mt-2 text-sm leading-relaxed text-slate-800">
+            {inFlight.transcript
+              ? `“${inFlight.transcript}”`
+              : "Waiting for transcript from Voice Cursor…"}
+          </p>
+        </section>
+      )}
+
+      {/* Tasks */}
+      <section className="mt-6">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-medium uppercase tracking-wider text-slate-500">
-            Tasks
+            Today&apos;s tasks
           </h2>
-          <button
-            onClick={clear}
-            className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
-          >
-            Clear buffer
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={seedDemo}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
+            >
+              Seed demo
+            </button>
+            <button
+              onClick={clear}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
+            >
+              Clear buffer
+            </button>
+          </div>
         </div>
 
-        {tasks.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-            No tasks captured yet today. Speak into Voice Cursor to begin.
-          </div>
+        {stats?.captured === 0 || tasks.length === 0 ? (
+          <EmptyState />
         ) : (
-          <ul className="space-y-3">
-            {tasks.flatMap((group) =>
-              group.tasks.map((t, i) => (
-                <li
-                  key={`${group._id}-${i}`}
-                  className="flex items-start justify-between rounded-lg border border-slate-200 bg-white p-4"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{t.title}</p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {t.category}
-                      {t.executionNote ? ` · ${t.executionNote}` : ""}
-                    </p>
+          <div className="space-y-6">
+            {PRIORITY_ORDER.map((p) => {
+              const rows = grouped[p];
+              if (rows.length === 0) return null;
+              return (
+                <div key={p}>
+                  <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wider text-slate-400">
+                    <span>{p}</span>
+                    <span className="h-px flex-1 bg-slate-200" />
+                    <span>{rows.length}</span>
                   </div>
-                  <div className="ml-4 flex shrink-0 items-center gap-2">
-                    <span
-                      className={`rounded-full border px-2 py-0.5 text-xs ${
-                        priorityStyles[t.priority] ?? priorityStyles.low
-                      }`}
-                    >
-                      {t.priority}
-                    </span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs ${
-                        statusStyles[t.status] ?? statusStyles.todo
-                      }`}
-                    >
-                      {t.status}
-                    </span>
-                  </div>
-                </li>
-              )),
-            )}
-          </ul>
+                  <ul className="space-y-2">
+                    {rows.map(({ recordId, index, t }) => {
+                      const isNew = arrivals.has(recordId);
+                      return (
+                        <li
+                          key={`${recordId}-${index}`}
+                          className={`group flex items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 transition-all ${
+                            isNew ? "animate-[fadeIn_0.4s_ease-out]" : ""
+                          }`}
+                        >
+                          <button
+                            onClick={() =>
+                              toggle({
+                                taskRecordId: recordId as unknown as never,
+                                index,
+                              })
+                            }
+                            className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+                              t.status === "done"
+                                ? "border-emerald-500 bg-emerald-500 text-white"
+                                : "border-slate-300 hover:border-slate-500"
+                            }`}
+                            aria-label="toggle done"
+                          >
+                            {t.status === "done" ? "✓" : ""}
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <p
+                              className={`truncate text-sm font-medium ${
+                                t.status === "done"
+                                  ? "text-slate-400 line-through"
+                                  : "text-slate-900"
+                              }`}
+                            >
+                              {t.title}
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              <span>{categoryEmoji[t.category] ?? "•"}</span>{" "}
+                              {t.category}
+                              {t.executionNote ? ` · ${t.executionNote}` : ""}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ring-1 ${
+                                priorityStyles[t.priority] ?? priorityStyles.low
+                              }`}
+                            >
+                              {t.priority}
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${
+                                statusStyles[t.status] ?? statusStyles.todo
+                              }`}
+                            >
+                              {t.status}
+                            </span>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
         )}
       </section>
 
@@ -176,11 +331,54 @@ export default function Page() {
           <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-slate-500">
             Last reflection · {reflection.date}
           </h2>
-          <div className="whitespace-pre-wrap rounded-lg border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-700">
+          <div className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-5 text-sm leading-relaxed text-slate-700">
             {reflection.summary}
           </div>
         </section>
       )}
+
+      <footer className="mt-12 text-center text-xs text-slate-400">
+        Voice Cursor · Convex + Claude via Respan
+      </footer>
     </main>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  tone = "slate",
+}: {
+  label: string;
+  value: number;
+  tone?: "slate" | "emerald" | "violet";
+}) {
+  const toneStyles =
+    tone === "emerald"
+      ? "text-emerald-700"
+      : tone === "violet"
+        ? "text-violet-700"
+        : "text-slate-900";
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <p className="text-[11px] uppercase tracking-wider text-slate-400">{label}</p>
+      <p className={`mt-1 text-2xl font-semibold tabular-nums ${toneStyles}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center">
+      <p className="text-sm text-slate-600">No tasks yet today.</p>
+      <p className="mt-2 text-xs text-slate-400">
+        Try saying something like:
+      </p>
+      <p className="mt-2 italic text-sm text-slate-500">
+        &ldquo;{EXAMPLE_DUMP}&rdquo;
+      </p>
+    </div>
   );
 }

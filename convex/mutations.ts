@@ -12,3 +12,17 @@ export const seedAudioClip = mutation({
     });
   },
 });
+
+export const toggleTaskDone = mutation({
+  args: { taskRecordId: v.id("tasks"), index: v.number() },
+  handler: async (ctx, { taskRecordId, index }) => {
+    const rec = await ctx.db.get(taskRecordId);
+    if (!rec) return;
+    const next = rec.tasks.map((t, i) =>
+      i === index
+        ? { ...t, status: t.status === "done" ? ("todo" as const) : ("done" as const) }
+        : t,
+    );
+    await ctx.db.patch(taskRecordId, { tasks: next });
+  },
+});
