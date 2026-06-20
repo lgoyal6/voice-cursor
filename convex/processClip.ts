@@ -60,11 +60,25 @@ const SUBMIT_TASKS_TOOL = {
   },
 };
 
-async function callClaude(
+function normalizeTasks(rawTasks: any[]): StructuredTask[] {
+  return rawTasks.map((t: any) => ({
+    title: String(t.title ?? "").slice(0, 200),
+    priority:
+      t.priority === "high" || t.priority === "medium" || t.priority === "low"
+        ? t.priority
+        : "medium",
+    category: ["work", "personal", "admin", "learning"].includes(t.category)
+      ? t.category
+      : "personal",
+    status: "todo" as const,
+  }));
+}
+
+async function callClaudeWithToolUse(
+  client: Anthropic,
   transcript: string,
   sessionId: string,
 ): Promise<StructuredTask[]> {
-  const client = respanClient();
   const res = await client.messages.create(
     {
       model: "claude-opus-4-7",
@@ -76,35 +90,80 @@ async function callClaude(
     },
     { headers: respanHeaders(sessionId) },
   );
-
   const toolUse = res.content.find(
     (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
   );
   if (!toolUse) {
-    // Surface the actual response so debugging isn't blind.
     const text = res.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
       .map((b) => b.text)
       .join("\n");
     throw new Error(
-      `Claude returned no tool_use. stop_reason=${res.stop_reason} text=${text.slice(0, 200)}`,
+      `no tool_use block; stop=${res.stop_reason} text=${text.slice(0, 200)}`,
     );
   }
   const input = toolUse.input as { tasks?: unknown };
-  if (!Array.isArray(input.tasks)) {
-    throw new Error("tool_use input had no tasks array");
+  if (!Array.isArray(input.tasks)) throw new Error("tool_use had no tasks array");
+  return normalizeTasks(input.tasks);
+}
+
+async function callClaudePlainJson(
+  client: Anthropic,
+  transcript: string,
+  sessionId: string,
+): Promise<StructuredTask[]> {
+  const res = await client.messages.create(
+    {
+      model: "claude-opus-4-7",
+      max_tokens: 2048,
+      system:
+        SYSTEM +
+        "\n\nReturn ONLY a JSON array starting with [ and ending with ]. No prose, no code fences.",
+      messages: [{ role: "user", content: `Input: ${transcript}` }],
+    },
+    { headers: respanHeaders(sessionId) },
+  );
+  const text = res.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n")
+    .trim();
+  // Strip code fences, then extract the first JSON array we can find.
+  let cleaned = text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  const start = cleaned.indexOf("[");
+  const end = cleaned.lastIndexOf("]");
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error(`no JSON array found in response: ${text.slice(0, 200)}`);
   }
-  return input.tasks.map((t: any) => ({
-    title: String(t.title ?? "").slice(0, 200),
-    priority:
-      t.priority === "high" || t.priority === "medium" || t.priority === "low"
-        ? t.priority
-        : "medium",
-    category: ["work", "personal", "admin", "learning"].includes(t.category)
-      ? t.category
-      : "personal",
-    status: "todo" as const,
-  }));
+  cleaned = cleaned.slice(start, end + 1);
+  const parsed = JSON.parse(cleaned);
+  if (!Array.isArray(parsed)) throw new Error("parsed JSON is not an array");
+  return normalizeTasks(parsed);
+}
+
+async function callClaude(
+  transcript: string,
+  sessionId: string,
+): Promise<StructuredTask[]> {
+  const client = respanClient();
+  // 1. Try tool_use (cleanest, Anthropic enforces schema)
+  try {
+    const result = await callClaudeWithToolUse(client, transcript, sessionId);
+    console.log(`[processClip] tool_use path ok, ${result.length} tasks`);
+    return result;
+  } catch (toolErr) {
+    console.warn(
+      "[processClip] tool_use failed, falling back to plain JSON prompt:",
+      toolErr instanceof Error ? toolErr.message : String(toolErr),
+    );
+  }
+  // 2. Fall back to prompt-based JSON (works even if Respan strips `tools`)
+  const result = await callClaudePlainJson(client, transcript, sessionId);
+  console.log(`[processClip] plain JSON path ok, ${result.length} tasks`);
+  return result;
 }
 
 export const structure = internalAction({
