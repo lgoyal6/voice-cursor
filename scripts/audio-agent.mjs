@@ -2,24 +2,24 @@
 /**
  * Voice Cursor audio agent — serial queue worker.
  *
+ * Drives the Voice Cursor + BlackHole + Hammerspoon pipeline:
+ *
  *   loop:
- *     clip = convex.mutation(agentQueue.claimNext)   // atomic
+ *     clip = convex.mutation(agentQueue.claimNext)   ← atomic, marks "processing"
  *     if !clip: sleep, continue
  *     audio = fetch(clip.audioUrl)
- *     play locally (optional — for Voice Cursor + BlackHole rigs)
- *     transcript = whisper(audio)
- *     convex.mutation(agentQueue.completeClip)
- *       → triggers structuring → Notion mirror → executeTask
- *     (Convex 9pm cron handles reflection + iMessage delivery)
+ *     afplay audio → BlackHole → Voice Cursor types into #vc-dump
+ *     dashboard bridge submits transcript to Convex → structure → Notion → executeTask
+ *     wait until clip status flips to "done" or "error", then claim next
  *
- * Strict serial: one clip in flight at a time. Restart-safe (clips stay
- * "agent_claimed" until completed or marked error).
+ * Strict serial: one clip in flight at a time. No Whisper, no API keys —
+ * transcription is whatever Voice Cursor produces locally.
  *
  * Run:  npm run audio:agent
- * Env:  NEXT_PUBLIC_CONVEX_URL          required
- *       OPENAI_API_KEY                  required (Whisper)
- *       VC_AUDIO_DEVICE                 optional, afplay output device
- *       VC_SKIP_LOCAL_PLAY=1            optional, skip afplay entirely
+ *
+ * Env:  NEXT_PUBLIC_CONVEX_URL   required
+ *       VC_AUDIO_DEVICE          optional, e.g. "BlackHole 2ch"
+ *       VC_TRANSCRIPT_TIMEOUT_MS optional (default 60000)
  */
 
 import { ConvexHttpClient } from "convex/browser";
@@ -31,14 +31,10 @@ import { join } from "node:path";
 
 const CONVEX_URL =
   process.env.NEXT_PUBLIC_CONVEX_URL ?? process.env.CONVEX_URL;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const TIMEOUT_MS = Number(process.env.VC_TRANSCRIPT_TIMEOUT_MS ?? 60_000);
 
 if (!CONVEX_URL) {
   console.error("✗ NEXT_PUBLIC_CONVEX_URL not set");
-  process.exit(1);
-}
-if (!OPENAI_API_KEY) {
-  console.error("✗ OPENAI_API_KEY not set — Whisper required for the agent");
   process.exit(1);
 }
 
@@ -50,34 +46,34 @@ const ts = () => new Date().toISOString().slice(11, 19);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function playLocally(path) {
-  if (process.env.VC_SKIP_LOCAL_PLAY === "1") return;
-  const args = process.env.VC_AUDIO_DEVICE
-    ? ["-d", process.env.VC_AUDIO_DEVICE, path]
-    : [path];
-  const child = spawn("afplay", args, { stdio: "ignore" });
-  child.on("error", (err) => console.error("[afplay]", err));
+  return new Promise((resolve) => {
+    const args = process.env.VC_AUDIO_DEVICE
+      ? ["-d", process.env.VC_AUDIO_DEVICE, path]
+      : [path];
+    const child = spawn("afplay", args, { stdio: "ignore" });
+    child.on("error", (err) => {
+      console.error("[afplay]", err);
+      resolve();
+    });
+    child.on("exit", resolve);
+  });
 }
 
-async function transcribeWithWhisper(audioBuffer, filename) {
-  const form = new FormData();
-  form.append("file", new Blob([audioBuffer], { type: "audio/m4a" }), filename);
-  form.append("model", "whisper-1");
-  const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-    body: form,
-  });
-  if (!res.ok) {
-    throw new Error(`Whisper ${res.status}: ${await res.text()}`);
+async function waitForDone(clipId, deadlineMs) {
+  const start = Date.now();
+  while (Date.now() - start < deadlineMs) {
+    const s = await convex.query(api.agentQueue.getClipStatus, { clipId });
+    if (!s) return { ok: false, reason: "clip vanished" };
+    if (s.status === "done") return { ok: true };
+    if (s.status === "error") return { ok: false, reason: "clip marked error" };
+    await sleep(750);
   }
-  const json = await res.json();
-  return (json.text ?? "").trim();
+  return { ok: false, reason: `timeout after ${deadlineMs}ms` };
 }
 
 async function processOne(clip) {
   console.log(`[${ts()}] claimed ${clip._id}`);
 
-  // 1. Download audio
   const res = await fetch(clip.audioUrl);
   if (!res.ok) throw new Error(`download ${res.status}`);
   const audio = Buffer.from(await res.arrayBuffer());
@@ -85,26 +81,25 @@ async function processOne(clip) {
   await writeFile(path, audio);
   console.log(`[${ts()}]   downloaded ${audio.byteLength}B`);
 
-  // 2. Optional: play locally so Voice Cursor can hear it through BlackHole
-  playLocally(path);
+  console.log(`[${ts()}]   playing via afplay → BlackHole → Voice Cursor`);
+  await playLocally(path);
 
-  // 3. Transcribe via Whisper
-  const transcript = await transcribeWithWhisper(audio, `${clip._id}.m4a`);
-  if (!transcript) {
-    throw new Error("empty transcript");
+  console.log(`[${ts()}]   waiting for Voice Cursor transcript (≤${TIMEOUT_MS}ms)`);
+  const result = await waitForDone(clip._id, TIMEOUT_MS);
+  if (result.ok) {
+    console.log(`[${ts()}]   ✓ clip ${clip._id} done`);
+  } else {
+    console.warn(`[${ts()}]   ✗ ${result.reason}`);
+    await convex.mutation(api.agentQueue.failClip, {
+      clipId: clip._id,
+      reason: result.reason,
+    });
   }
-  console.log(`[${ts()}]   transcript: ${transcript.slice(0, 80)}…`);
-
-  // 4. Hand off to Convex — structure → Notion → executeTask
-  await convex.mutation(api.agentQueue.completeClip, {
-    clipId: clip._id,
-    transcript,
-  });
-  console.log(`[${ts()}]   handed off to Convex pipeline`);
 }
 
 async function loop() {
   console.log(`[${ts()}] agent starting · ${CONVEX_URL}`);
+  console.log(`[${ts()}] dashboard must be open on Mac for Voice Cursor bridge to work`);
   while (running) {
     let clip;
     try {
@@ -127,9 +122,7 @@ async function loop() {
           clipId: clip._id,
           reason: String(err).slice(0, 200),
         });
-      } catch {
-        // swallow
-      }
+      } catch {}
     }
   }
   console.log(`[${ts()}] agent stopped`);

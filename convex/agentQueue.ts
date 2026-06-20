@@ -1,13 +1,10 @@
-import { mutation } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { internal } from "./_generated/api";
 
 /**
- * Atomically claims the oldest unprocessed audio clip for the agent.
- * Returns { _id, storageId, audioUrl, createdAt } or null.
- *
- * The clip is marked status="agent_claimed" so subsequent claims skip it
- * and the cron leaves it alone.
+ * Atomically claims the oldest "uploaded" audio clip for the agent.
+ * Marks status "processing" — this is what the dashboard's bridge looks
+ * for to start polling #vc-dump for the Voice Cursor transcript.
  */
 export const claimNext = mutation({
   args: {},
@@ -18,7 +15,7 @@ export const claimNext = mutation({
       .order("asc")
       .first();
     if (!clip || !clip.storageId) return null;
-    await ctx.db.patch(clip._id, { status: "agent_claimed" });
+    await ctx.db.patch(clip._id, { status: "processing" });
     const audioUrl = await ctx.storage.getUrl(clip.storageId);
     return {
       _id: clip._id,
@@ -29,28 +26,13 @@ export const claimNext = mutation({
   },
 });
 
-/**
- * Agent calls this once it has a transcript. Sets the transcript on the
- * clip, marks "processing", and schedules the full structuring pipeline
- * (Claude via Respan → tasks → Notion mirror → executeTask).
- */
-export const completeClip = mutation({
-  args: { clipId: v.id("audio_clips"), transcript: v.string() },
-  handler: async (ctx, { clipId, transcript }) => {
-    const trimmed = transcript.trim();
-    if (!trimmed) {
-      await ctx.db.patch(clipId, { status: "error" });
-      return { ok: false } as const;
-    }
-    await ctx.db.patch(clipId, {
-      status: "processing",
-      transcript: trimmed,
-    });
-    await ctx.scheduler.runAfter(0, internal.processClip.structure, {
-      clipId,
-      transcript: trimmed,
-    });
-    return { ok: true } as const;
+/** Lets the agent poll completion of a claim. */
+export const getClipStatus = query({
+  args: { clipId: v.id("audio_clips") },
+  handler: async (ctx, { clipId }) => {
+    const c = await ctx.db.get(clipId);
+    if (!c) return null;
+    return { status: c.status, hasTranscript: !!c.transcript };
   },
 });
 

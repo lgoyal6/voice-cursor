@@ -1,6 +1,5 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { internal } from "./_generated/api";
 
 /** Returns a one-time URL the watcher POSTs the audio bytes to. */
 export const generateUploadUrl = mutation({
@@ -9,21 +8,16 @@ export const generateUploadUrl = mutation({
 });
 
 /**
- * Called by the watcher after it has uploaded audio bytes to Convex Storage.
- * Inserts an audio_clips row in "processing" and kicks off Whisper transcription.
+ * Called by the watcher / iOS Shortcut endpoint after audio bytes are uploaded.
+ * Inserts an "uploaded" row; the audio agent's claimNext picks it up serially.
  */
 export const submitAudioClip = mutation({
   args: { storageId: v.id("_storage") },
   handler: async (ctx, { storageId }) => {
-    const clipId = await ctx.db.insert("audio_clips", {
-      status: "processing",
+    return await ctx.db.insert("audio_clips", {
+      status: "uploaded",
       storageId,
       createdAt: Date.now(),
     });
-    await ctx.scheduler.runAfter(0, internal.transcribeAudio.transcribe, {
-      clipId,
-      storageId,
-    });
-    return clipId;
   },
 });

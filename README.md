@@ -85,16 +85,21 @@ npm run voicememo:watch
 
 Slower than path A (iCloud sync takes 10–30s) but requires no phone setup.
 
-### Downstream — both paths converge
+### Downstream — both paths converge through the agent
 
-1. Audio bytes land in Convex Storage (`storage:submitAudioClip` mutation).
-2. Convex schedules `transcribeAudio.transcribe` → OpenAI Whisper → transcript
-   written to the clip.
-3. `processClip.structure` calls Claude via Respan → structured tasks → writes
-   to the `tasks` table → fires `notion.writeTasks` to mirror into Notion.
-4. `executeTask.run` looks at the top task → Gmail draft / Calendar event /
-   marks "ready".
-5. 9pm cron → reflection → AppleScript iMessage to your phone.
+1. Audio bytes land in Convex Storage; `audio_clips` row inserted with
+   `status: "uploaded"`.
+2. `npm run audio:agent` is a serial worker. `agentQueue.claimNext` atomically
+   pulls the oldest uploaded clip, marks it `processing`, returns a signed URL.
+3. Agent downloads + plays via `afplay` (set `VC_AUDIO_DEVICE="BlackHole 2ch"`
+   to send to BlackHole specifically). Voice Cursor hears it, transcribes,
+   types into the dashboard's `#vc-dump` textarea.
+4. Dashboard bridge submits the transcript via `submitTranscript` mutation →
+   schedules `processClip.structure`.
+5. `processClip.structure` calls Claude via Respan → writes tasks → fires
+   `notion.writeTasks` → fires `executeTask.run`.
+6. Agent polls clip status; once `done`, claims the next clip.
+7. 9pm cron → reflection → AppleScript iMessage to your phone.
 
 ## Audio agent (proactive Convex → Voice Cursor)
 
