@@ -3,14 +3,14 @@
 Voice-first task assistant. This repo owns the **intelligence + delivery layer**:
 transcript → structured tasks → execution → end-of-day reflection.
 
-Audio capture and upload to `audio_clips` is the teammate's pipeline — we only read
+Audio capture and upload to `audio_clips` is the teammate's pipeline - we only read
 from that table.
 
 ## Stack
-- **Convex** — reactive backend, scheduled functions, tasks/reflections tables
+- **Convex** - reactive backend, scheduled functions, tasks/reflections tables
 - **Claude API** via the **Respan** gateway (observability)
-- **Photon / Spectrum** — iMessage delivery for end-of-day reflection
-- **Next.js 15 (App Router) + Tailwind** — live dashboard
+- **Photon / Spectrum** - iMessage delivery for end-of-day reflection
+- **Next.js 15 (App Router) + Tailwind** - live dashboard
 
 ## Setup
 
@@ -24,8 +24,8 @@ npm run dev                      # in another
 ### Required environment variables
 See `.env.example`. You will need:
 
-- `CONVEX_DEPLOYMENT_URL` / `NEXT_PUBLIC_CONVEX_URL` — from teammate
-- `ANTHROPIC_API_KEY` — used as the bearer token against the Respan gateway
+- `CONVEX_DEPLOYMENT_URL` / `NEXT_PUBLIC_CONVEX_URL` - from teammate
+- `ANTHROPIC_API_KEY` - used as the bearer token against the Respan gateway
 - `RESPAN_API_KEY`, `RESPAN_BASE_URL` (default `https://api.respan.ai/v1`)
 - `PHOTON_API_KEY`, `PHOTON_TARGET_NUMBER`
 
@@ -53,12 +53,12 @@ This gives a full trace per structuring / reflection call in the Respan dashboar
 
 ## Capture paths
 
-Two ways to get audio into Convex from your phone — pick one or run both.
+Two ways to get audio into Convex from your phone - pick one or run both.
 
 ### A. iOS Shortcut → direct upload (fastest, recommended)
 
 Build a Shortcut on iPhone:
-1. **Record Audio** action — records on tap, stops on tap.
+1. **Record Audio** action - records on tap, stops on tap.
 2. **Get Contents of URL** action:
    - URL: `https://<your-deployment>.convex.site/upload-audio`
      (i.e. `NEXT_PUBLIC_CONVEX_SITE_URL` + `/upload-audio`)
@@ -85,7 +85,7 @@ npm run voicememo:watch
 
 Slower than path A (iCloud sync takes 10–30s) but requires no phone setup.
 
-### Downstream — both paths converge through the agent
+### Downstream - both paths converge through the agent
 
 1. Audio bytes land in Convex Storage; `audio_clips` row inserted with
    `status: "uploaded"`.
@@ -110,7 +110,7 @@ writes it to a temp file, and plays it with `afplay`. Combined with BlackHole
 as macOS output, Voice Cursor hears it as mic input and transcribes into the
 focused `#vc-dump` textarea.
 
-This runs in parallel with Convex's Whisper transcription — you get both a
+This runs in parallel with Convex's Whisper transcription - you get both a
 Voice Cursor transcript (via the textarea bridge) and a Whisper transcript
 (server-side). Use whichever feels better.
 
@@ -125,7 +125,7 @@ actually playing them (good for debugging the subscription).
 ## Voice Cursor quick-add (at the Mac)
 
 The dashboard has a **Dictate** button (and Hammerspoon hotkey ⌘⇧V) that
-exposes the `#vc-dump` textarea. Speak — Voice Cursor types into it — hit
+exposes the `#vc-dump` textarea. Speak - Voice Cursor types into it - hit
 Submit. The text is dropped straight into Convex as a typed clip, skipping
 audio upload and Whisper. This is the fastest path when you're at your Mac.
 
@@ -133,9 +133,9 @@ audio upload and Whisper. This is the fastest path when you're at your Mac.
 
 `hammerspoon/init.lua` provides:
 
-- **⌘⇧V** — open the dashboard with `?dictate=1`, focus the textarea so
+- **⌘⇧V** - open the dashboard with `?dictate=1`, focus the textarea so
   Voice Cursor can type into it
-- **⌘⇧T** — surface the current top open task as a native macOS notification
+- **⌘⇧T** - surface the current top open task as a native macOS notification
 - Background poll every 60s against the Convex HTTP action `/top-task`;
   notifies on a new top task
 
