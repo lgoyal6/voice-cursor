@@ -12,6 +12,61 @@ from that table.
 - **Photon / Spectrum** - iMessage delivery for end-of-day reflection
 - **Next.js 15 (App Router) + Tailwind** - live dashboard
 
+## From clip to task
+
+`audio_clips` is the seam. Rows land in it from the teammate's capture pipeline
+or from this repo's own `/upload-audio` HTTP action, and everything below the
+table is this repo. Which claimer picks a row up depends on one field: a clip
+with a `storageId` belongs to the audio agent, a clip without one belongs to the
+5-second cron.
+
+```mermaid
+flowchart TB
+    subgraph Ingress["capture"]
+        Shortcut["iOS Shortcut POST<br/>or voicememo-watcher.mjs"]
+        Http["convex/http.ts<br/>POST /upload-audio<br/>optional UPLOAD_SECRET"]
+        Dictate["dashboard Dictate button<br/>Voice Cursor types into<br/>the vc-dump textarea"]
+        Shortcut --> Http
+    end
+
+    Clips[("audio_clips<br/>status, storageId?, transcript?")]
+    Http --> Clips
+
+    Clips -- "has storageId" --> Claim1["agentQueue.claimNext<br/>serial, atomic, oldest first<br/>returns a signed audio URL"]
+    Clips -- "no storageId" --> Claim2["crons: claimUploadedClips every 5s<br/>skips anything the agent owns"]
+
+    Claim1 --> Play["audio-agent.mjs plays the clip<br/>through afplay into BlackHole;<br/>Voice Cursor hears it and types<br/>into the vc-dump textarea"]
+    Play --> Bridge["dashboard bridge polls the textarea,<br/>calls submitTranscript"]
+    Claim2 -- "transcript already present" --> Structure
+    Bridge --> Structure
+    Dictate -- "submitTypedClip inserts a row<br/>already marked processing" --> Structure
+
+    Structure["processClip.structure<br/>Claude through the Respan base URL<br/>tool_use first, plain-JSON prompt second,<br/>two attempts, then the whole transcript<br/>survives as one high-priority task"]
+
+    Structure -- "NOTION_API_KEY and NOTION_DATABASE_ID set" --> Notion["notion.writeTasks<br/>the Notion database is the source of truth"]
+    Structure -- "otherwise" --> Convex[("tasks table in Convex")]
+
+    Notion --> Pull["crons: notion.pull every 8s<br/>reconciles Notion rows into tasks:<br/>insert, patch, delete"]
+    Pull --> Convex
+    Convex --> Dash["dashboard subscribes reactively"]
+
+    Convex -- "only on the non-Notion path" --> Exec["executeTask.run on the top-priority task<br/>work + email wording: Gmail draft<br/>admin + calendar wording: Calendar event<br/>no GOOGLE_ACCESS_TOKEN or no match: mark ready"]
+
+    Page["crons: notion.ingestPage every 10s<br/>paragraphs dictated into the Notion page body,<br/>split by Claude, then the paragraph is deleted"]
+    Page --> Notion
+
+    Cron9["crons: 0 4 UTC, which is 9pm PT<br/>endOfDay.runReflection over today's tasks"]
+    Convex --> Cron9
+    Cron9 --> Refl[("reflections table")]
+    Refl --> Photon["Photon send, skipped when PHOTON_API_KEY is unset"]
+    Refl --> Apple["dashboard POSTs /api/deliver,<br/>which shells out to osascript<br/>and sends the iMessage from the Mac"]
+```
+
+The two branches out of `structure` are the thing to keep straight: with Notion
+configured, tasks only reach Convex on the next `notion.pull` tick and
+`executeTask` never fires. Without Notion, tasks are written to Convex directly
+and the executor runs immediately.
+
 ## Setup
 
 ```bash
@@ -176,6 +231,45 @@ Executor calls Gmail / Calendar REST endpoints directly with
 via the OAuth Playground with the `gmail.compose` and `calendar.events` scopes
 and drop it in `.env.local` as `GOOGLE_ACCESS_TOKEN`. If unset, the executor
 falls back to marking the task `ready` with a note.
+
+## Deploying it
+
+Only the Convex half deploys. The Mac half cannot.
+
+```bash
+npm run convex:deploy          # convex deploy
+```
+
+That pushes the schema, the four crons, and the HTTP router to a Convex
+production deployment. Once it lands, `https://<deployment>.convex.site/upload-audio`
+is a real endpoint the iOS Shortcut can POST to, and the crons run on Convex's
+clock rather than on your laptop.
+
+`.env.local` is only read by the Next.js side. Every variable the Convex
+functions read has to be set on the deployment itself:
+
+```bash
+npx convex env set ANTHROPIC_API_KEY ...
+npx convex env set RESPAN_BASE_URL ...
+npx convex env set NOTION_API_KEY ...
+npx convex env set NOTION_DATABASE_ID ...
+npx convex env set NOTION_PAGE_ID ...        # only for the ingestPage cron
+npx convex env set PHOTON_API_KEY ...
+npx convex env set PHOTON_TARGET_NUMBER ...
+npx convex env set GOOGLE_ACCESS_TOKEN ...
+npx convex env set UPLOAD_SECRET ...         # optional, gates /upload-audio
+```
+
+The dashboard is a plain `next build` / `next start`, but hosting it off a Mac
+breaks two things on purpose:
+
+- `/api/deliver` shells out to `osascript` against Messages.app, so iMessage
+  delivery only works on a Mac that is signed in to iMessage.
+- The vc-dump bridge assumes Voice Cursor is running on the same machine and
+  typing into the browser, so the audio transcript path needs that machine too.
+
+`scripts/audio-agent.mjs`, `scripts/voicememo-watcher.mjs` and the Hammerspoon
+config are local processes by design and have no deploy target.
 
 ## Status
 - [x] Schema (tasks + reflections)
